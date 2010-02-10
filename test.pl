@@ -3,9 +3,9 @@
 # `make test'. After `make install' it should work as `perl test.pl'
 
 use strict;
-use Test::Simple tests => 32;
+use Test::Simple tests => 34;
 
-my $NUM_TESTS = 32;
+my $NUM_TESTS = 34;
 
 use Cisco::Management;
 ok(1, "Loading Module"); # If we made it this far, we're ok.
@@ -120,7 +120,7 @@ my $error;
         ok(1, "Interface (info)")
     } else {
         $error = $cm->error;
-        ok(0, "Interface (info)")
+        ok(0, "Interface (info) [$error]")
     }
 
     # Interface get by name
@@ -142,6 +142,46 @@ my $error;
         }
     }
     ok($OK, "Interface (get by index)");
+
+#Interface Metrics
+    if (defined($ifs = $cm->interface_metrics(-metrics => ['octets', 'multiCasts']))) {
+        $OK = 1;
+        for (keys(%{$ifs})) {
+            if (!defined($ifs->{$_}->{InMulticasts}) || 
+                !defined($ifs->{$_}->{OutMulticasts}) || 
+                !defined($ifs->{$_}->{InOctets}) || 
+                !defined($ifs->{$_}->{OutOctets}) || 
+                defined($ifs->{$_}->{InBroadcasts}) || 
+                defined($ifs->{$_}->{OutBroadcasts})) {
+                $OK = 0;
+                last
+            }
+        }
+        ok($OK, "Interface (metrics)")
+    } else {
+        $error = $cm->error;
+        ok(0, "Interface (metrics) [$error]")
+    }
+
+#Interface Util
+    if (defined($ifs = $cm->interface_utilization(-polling => 3, -metrics => ['octets', 'BroadCasts']))) {
+        $OK = 1;
+        for (keys(%{$ifs})) {
+            if (defined($ifs->{$_}->{InMulticasts}) || 
+                defined($ifs->{$_}->{OutMulticasts}) || 
+                !defined($ifs->{$_}->{InOctets}) || 
+                !defined($ifs->{$_}->{OutOctets}) || 
+                !defined($ifs->{$_}->{InBroadcasts}) || 
+                !defined($ifs->{$_}->{OutBroadcasts})) {
+                $OK = 0;
+                last
+            }
+        }
+        ok($OK, "Interface (utilization)")
+    } else {
+        $error = $cm->error;
+        ok(0, "Interface (utilization) [$error]")
+    }
 
 # Lines
     # Number of

@@ -6,12 +6,10 @@ WriteMakefile(
     NAME              => 'Cisco::Management',
     VERSION_FROM      => 'lib/Cisco/Management.pm', # finds $VERSION
     EXE_FILES         => ['bin/cisco-conf.pl',
-                          'bin/cisco-cpui.pl',
+                          'bin/cisco-info.pl',
                           'bin/cisco-intf.pl',
                           'bin/cisco-line.pl',
-                          'bin/cisco-memi.pl',
                           'bin/cisco-pass.pl',
-                          'bin/cisco-sysi.pl',
                           'bin/cisco-ping.pl'],
     PREREQ_PM         => {Test::Simple => undef, 
                           Net::SNMP => undef,

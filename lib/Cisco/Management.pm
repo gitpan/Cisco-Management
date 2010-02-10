@@ -16,14 +16,15 @@ use Sys::Hostname;
 use IO::Socket;
 use Net::SNMP qw(:asn1 :snmp DEBUG_ALL);
 
-our $VERSION     = '0.01';
-our @ISA         = qw(Exporter);
-our @EXPORT      = qw();
-our %EXPORT_TAGS = (
-                    'all'      => [qw()],
-                    'password' => [qw(password_decrypt password_encrypt)]
-                   );
-our @EXPORT_OK   = (@{$EXPORT_TAGS{'password'}});
+our $VERSION      = '0.02';
+our @ISA          = qw(Exporter);
+our @EXPORT       = qw();
+our %EXPORT_TAGS  = (
+                     'password' => [qw(password_decrypt password_encrypt)],
+                     'hashkeys' => [qw(@IPKEYS @IFKEYS @LINEKEYS @SESSIONKEYS @IFMETRICKEYS @IFMETRICRETKEYS)]
+                    );
+our @EXPORT_OK    = map {@{$EXPORT_TAGS{$_}}} keys(%EXPORT_TAGS);
+$EXPORT_TAGS{ALL} = [ @EXPORT_OK ];
 
 ########################################################
 # Start Variables
@@ -36,6 +37,15 @@ my @xlat = ( 0x64, 0x73, 0x66, 0x64, 0x3B, 0x6B, 0x66, 0x6F, 0x41, 0x2C,
              0x39, 0x38, 0x37, 0x33, 0x32, 0x35, 0x34, 0x6B, 0x3B, 0x66, 
              0x67, 0x38, 0x37
            );
+
+our @IFKEYS      = qw(Index Description Type MTU Speed PhysAddress AdminStatus OperStatus LastChange Duplex);
+our @IPKEYS      = qw(IPAddress IPMask);
+
+our @LINEKEYS    = qw(Active Type Autobaud SpeedIn SpeedOut Flow Modem Location Term ScrLen ScrWid Esc Tmo Sestmo Rotary Uses Nses User Noise Number TimeActive);
+our @SESSIONKEYS = qw(Type Direction Address Name Current Idle Line);
+
+our @IFMETRICKEYS    = qw(Multicasts Broadcasts Octets Unicasts Discards Errors Unknowns);
+our @IFMETRICRETKEYS = qw(InMulticasts OutMulticasts InBroadcasts OutBroadcasts InOctets OutOctets InUnicasts OutUnicasts InDiscards OutDiscards InErrors OutErrors InUnknowns);
 
 our $LASTERROR;
 ########################################################
@@ -404,11 +414,11 @@ sub cpu_info {
     my @CPUInfo;
     for my $cpu (0..$#{$cpu5min}) {
         my %CPUInfoHash;
-        $CPUInfoHash{'Name'}    = $cpuName[$cpu];
-        $CPUInfoHash{'5sec'}    = $cpu5sec->[$cpu];
-        $CPUInfoHash{'1min'}    = $cpu1min->[$cpu];
-        $CPUInfoHash{'5min'}    = $cpu5min->[$cpu];
-        $CPUInfoHash{'_type_'}  = $cpuType{$type};
+        $CPUInfoHash{'Name'}   = $cpuName[$cpu];
+        $CPUInfoHash{'5sec'}   = $cpu5sec->[$cpu];
+        $CPUInfoHash{'1min'}   = $cpu1min->[$cpu];
+        $CPUInfoHash{'5min'}   = $cpu5min->[$cpu];
+        $CPUInfoHash{'_type_'} = $cpuType{$type};
         push @CPUInfo, \%CPUInfoHash
     }
     return \@CPUInfo
@@ -538,81 +548,338 @@ sub interface_info {
 
     my $session = $self->{'_SESSION_'};
 
-    # If Info
-    my $Index       = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.1');
-    if (!defined($Index)) {
-        $LASTERROR = "Cannot get interface info";
-        return(undef)
-    }
-    my $Description = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.2');
-    my $Type        = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.3');
-    my $MTU         = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.4');
-    my $Speed       = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.5');
-
-    my $Duplex      = &_snmpgetnext($session, '1.3.6.1.2.1.10.7.2.1.19');
-
-    my $PhysAddress = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.6');
-    my $AdminStatus = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.7');
-    my $OperStatus  = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.8');
-    my $LastChange  = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.9');
-
-    # IP Info
-    my $IPIndex     = &_snmpgetnext($session, '1.3.6.1.2.1.4.20.1.2');
-    if (!defined($Index)) {
-        $LASTERROR = "Cannot get interface info (IP)";
-        return(undef)
-    }
-    my $IPAddress  = &_snmpgetnext($session, '1.3.6.1.2.1.4.20.1.1');
-    my $IPMask     = &_snmpgetnext($session, '1.3.6.1.2.1.4.20.1.3');
-
-    my %IPInfo;
-    for (0..$#{$IPIndex}) {
-        my %IPInfoHash;
-        $IPInfoHash{'IPAddress'} = $IPAddress->[$_];
-        $IPInfoHash{'IPMask'}    = $IPMask->[$_];
-        push @{$IPInfo{$IPIndex->[$_]}}, \%IPInfoHash
-    }
-
-    my %UpDownStatus = (
-        1 => 'UP',
-        2 => 'DOWN',
-        3 => 'TEST',
-        4 => 'UNKNOWN',
-        5 => 'DORMANT',
-        6 => 'NOTPRESENT',
-        7 => 'LOWLAYERDOWN'
+    my %params = (
+        'ifs' => [-1]
     );
-    my %DuplexType = (
-        1 => 'UNKNOWN',
-        2 => 'HALF',
-        3 => 'FULL'
-    );
-    my %IfInfo;
-    for my $ifs (0..$#{$Index}) {
-        my %IfInfoHash;
-        $IfInfoHash{'Index'}       = $Index->[$ifs];
-        $IfInfoHash{'Description'} = $Description->[$ifs];
-        $IfInfoHash{'Type'}        = $Type->[$ifs];
-        $IfInfoHash{'MTU'}         = $MTU->[$ifs];
-        $IfInfoHash{'Speed'}       = $Speed->[$ifs];
 
-        $IfInfoHash{'Duplex'}      = exists($DuplexType{$Duplex->[$ifs]}) ? $DuplexType{$Duplex->[$ifs]} : $Duplex->[$ifs];
-
-        $IfInfoHash{'PhysAddress'} = ($PhysAddress->[$ifs] =~ /^\0/) ? unpack('H12', $PhysAddress->[$ifs]) : (($PhysAddress->[$ifs] =~ /^0x/) ? substr($PhysAddress->[$ifs],2) : $PhysAddress->[$ifs]);
-        $IfInfoHash{'AdminStatus'} = exists($UpDownStatus{$AdminStatus->[$ifs]}) ? $UpDownStatus{$AdminStatus->[$ifs]} : $AdminStatus->[$ifs];
-        $IfInfoHash{'OperStatus'}  = exists($UpDownStatus{$OperStatus->[$ifs]}) ? $UpDownStatus{$OperStatus->[$ifs]} : $OperStatus->[$ifs];
-        $IfInfoHash{'LastChange'}  = $LastChange->[$ifs];
-        if (exists($IPInfo{$Index->[$ifs]})) {
-            $IfInfoHash{'_IPINFO_'} = $IPInfo{$Index->[$ifs]}
+    my %args;
+    if (@_ == 1) {
+        ($params{'ifs'}) = @_;
+        if (!defined($params{'ifs'} = _get_range($params{'ifs'}))) {
+            return(undef)
         }
-        $IfInfo{$Index->[$ifs]} = bless \%IfInfoHash
+    } else {
+        %args = @_;
+        for (keys(%args)) {
+            if (/^-?interface(?:s)?$/i) {
+                if (!defined($params{'ifs'} = _get_range($args{$_}))) {
+                    return(undef)
+                }
+            }
+        }
+    }
+
+    my %IfInfo;
+    for my $ifs (@{$params{'ifs'}}) {
+
+        my $interface;
+        if ($ifs == -1) {
+            $interface = ''
+        } else {
+            $interface = '.' . $ifs
+        }
+
+        my %ret;
+        for my $oid (1..9) {
+            $ret{$IFKEYS[$oid-1]} = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.' . $oid . $interface);
+            if (!defined($ret{$IFKEYS[$oid-1]})) {
+                $LASTERROR = "Cannot get interface info - 1.3.6.1.2.1.2.2.1.$oid$interface";
+                return(undef)
+            }
+        }
+        # Duplex is different OID
+        $ret{$IFKEYS[9]} = &_snmpgetnext($session, '1.3.6.1.2.1.10.7.2.1.19' . $interface);
+
+        my %UpDownStatus = (
+            1 => 'UP',
+            2 => 'DOWN',
+            3 => 'TEST',
+            4 => 'UNKNOWN',
+            5 => 'DORMANT',
+            6 => 'NOTPRESENT',
+            7 => 'LOWLAYERDOWN'
+        );
+        my %DuplexType = (
+            1 => 'UNKNOWN',
+            2 => 'HALF',
+            3 => 'FULL'
+        );
+        for my $idx (0..$#{$ret{$IFKEYS[0]}}) {
+            my %IfInfoHash;
+            $IfInfoHash{$IFKEYS[0]} = $ret{$IFKEYS[0]}->[$idx];
+            $IfInfoHash{$IFKEYS[1]} = $ret{$IFKEYS[1]}->[$idx];
+            $IfInfoHash{$IFKEYS[2]} = $ret{$IFKEYS[2]}->[$idx];
+            $IfInfoHash{$IFKEYS[3]} = $ret{$IFKEYS[3]}->[$idx];
+            $IfInfoHash{$IFKEYS[4]} = $ret{$IFKEYS[4]}->[$idx];
+            $IfInfoHash{$IFKEYS[5]} = ($ret{$IFKEYS[5]}->[$idx] =~ /^\0/) ? unpack('H12', $ret{$IFKEYS[5]}->[$idx]) : (($ret{$IFKEYS[5]}->[$idx] =~ /^0x/) ? substr($ret{$IFKEYS[5]}->[$idx],2) : $ret{$IFKEYS[5]}->[$idx]);
+            $IfInfoHash{$IFKEYS[6]} = exists($UpDownStatus{$ret{$IFKEYS[6]}->[$idx]}) ? $UpDownStatus{$ret{$IFKEYS[6]}->[$idx]} : $ret{$IFKEYS[6]}->[$idx];
+            $IfInfoHash{$IFKEYS[7]} = exists($UpDownStatus{$ret{$IFKEYS[7]}->[$idx]}) ? $UpDownStatus{$ret{$IFKEYS[7]}->[$idx]} : $ret{$IFKEYS[7]}->[$idx];
+            $IfInfoHash{$IFKEYS[8]} = $ret{$IFKEYS[8]}->[$idx];
+            $IfInfoHash{$IFKEYS[9]} = exists($DuplexType{$ret{$IFKEYS[9]}->[$idx]}) ? $DuplexType{$ret{$IFKEYS[9]}->[$idx]} : $ret{$IFKEYS[9]}->[$idx];
+            $IfInfo{$ret{$IFKEYS[0]}->[$idx]} = bless \%IfInfoHash
+        }
     }
     return bless \%IfInfo, $class
 }
 
-sub interface_info_ip {
+sub interface_ip {
     my $self  = shift;
-    return $self->{'_IPINFO_'}
+    my $class = ref($self) || $self;
+
+    my $session = $self->{'_SESSION_'};
+
+    # IP Info
+    my $IPIndex   = &_snmpgetnext($session, '1.3.6.1.2.1.4.20.1.2');
+    if (!defined($IPIndex)) {
+        $LASTERROR = "Cannot get interface info (IP)";
+        return(undef)
+    }
+    my $IPAddress = &_snmpgetnext($session, '1.3.6.1.2.1.4.20.1.1');
+    my $IPMask    = &_snmpgetnext($session, '1.3.6.1.2.1.4.20.1.3');
+
+    my %IPInfo;
+    for (0..$#{$IPIndex}) {
+        my %IPInfoHash;
+        $IPInfoHash{$IPKEYS[0]} = $IPAddress->[$_];
+        $IPInfoHash{$IPKEYS[1]} = $IPMask->[$_];
+        push @{$IPInfo{$IPIndex->[$_]}}, \%IPInfoHash
+    }
+    return bless \%IPInfo, $class
+}
+
+sub interface_metrics {
+    my $self  = shift;
+    my $class = ref($self) || $self;
+
+    my $session = $self->{'_SESSION_'};
+
+    my %params = (
+        'ifs' => [-1],
+    );
+    for (@IFMETRICKEYS) {
+        $params{$_} = 1
+    }
+
+    my %args;
+    if (@_ == 1) {
+        ($params{'ifs'}) = @_;
+        if (!defined($params{'ifs'} = _get_range($params{'ifs'}))) {
+            return(undef)
+        }
+    } else {
+        %args = @_;
+        for (keys(%args)) {
+            if (/^-?interface(?:s)?$/i) {
+                if (!defined($params{'ifs'} = _get_range($args{$_}))) {
+                    return(undef)
+                }
+            } elsif (/^-?metric(?:s)?$/i) {
+                for (@IFMETRICKEYS) {
+                    $params{$_} = 0
+                }
+                if (ref($args{$_}) eq 'ARRAY') {
+                    $params{'oids'} = '';
+                    for my $mets (@{$args{$_}}) {
+                        if (exists($params{ucfirst(lc($mets))})) {
+                            $params{ucfirst(lc($mets))} = 1
+                        } else {
+                            $LASTERROR = "Invalid metric - $mets";
+                            return(undef)
+                        }
+                    }
+                } else {
+                    $params{'oids'} = '';
+                    if (exists($params{ucfirst(lc($args{$_}))})) {
+                        $params{ucfirst(lc($args{$_}))} = 1
+                    } else {
+                        $LASTERROR = "Invalid metric - $args{$_}";
+                        return(undef)
+                    }
+                }
+            }
+        }
+    }
+
+    my %IfMetric;
+    for my $ifs (@{$params{'ifs'}}) {
+
+        my $interface;
+        if ($ifs == -1) {
+            $interface = ''
+        } else {
+            $interface = '.' . $ifs
+        }
+
+        my %ret;
+        $ret{'Index'} = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.1' . $interface);
+        if (!defined($ret{'Index'})) {
+            $LASTERROR = "Cannot get index interface - $interface";
+            return(undef)
+        }
+        if ($params{'Multicasts'}) {
+            $ret{'InMulticasts'}  = &_snmpgetnext($session, '1.3.6.1.2.1.31.1.1.1.2' . $interface);
+            if (!defined($ret{'InMulticasts'})) {
+                $LASTERROR = "Cannot get metric interface - $interface";
+                return(undef)
+            }
+            $ret{'OutMulticasts'} = &_snmpgetnext($session, '1.3.6.1.2.1.31.1.1.1.4' . $interface);
+            if (!defined($ret{'OutMulticasts'})) {
+                $LASTERROR = "Cannot get metric interface - $interface";
+                return(undef)
+            }
+        }
+        if ($params{'Broadcasts'}) {
+            $ret{'InBroadcasts'}  = &_snmpgetnext($session, '1.3.6.1.2.1.31.1.1.1.3' . $interface);
+            if (!defined($ret{'InBroadcasts'})) {
+                $LASTERROR = "Cannot get metric interface - $interface";
+                return(undef)
+            }
+            $ret{'OutBroadcasts'} = &_snmpgetnext($session, '1.3.6.1.2.1.31.1.1.1.5' . $interface);
+            if (!defined($ret{'OutBroadcasts'})) {
+                $LASTERROR = "Cannot get metric interface - $interface";
+                return(undef)
+            }
+        }
+        if ($params{'Octets'}) {
+            $ret{'InOctets'}  = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.10' . $interface);
+            if (!defined($ret{'InOctets'})) {
+                $LASTERROR = "Cannot get metric interface - $interface";
+                return(undef)
+            }
+            $ret{'OutOctets'} = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.16' . $interface);
+            if (!defined($ret{'OutOctets'})) {
+                $LASTERROR = "Cannot get metric interface - $interface";
+                return(undef)
+            }
+        }
+        if ($params{'Unicasts'}) {
+            $ret{'InUnicasts'}  = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.11' . $interface);
+            if (!defined($ret{'InUnicasts'})) {
+                $LASTERROR = "Cannot get metric interface - $interface";
+                return(undef)
+            }
+            $ret{'OutUnicasts'} = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.17' . $interface);
+            if (!defined($ret{'OutUnicasts'})) {
+                $LASTERROR = "Cannot get metric interface - $interface";
+                return(undef)
+            }
+        }
+        if ($params{'Discards'}) {
+            $ret{'InDiscards'}  = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.13' . $interface);
+            if (!defined($ret{'InDiscards'})) {
+                $LASTERROR = "Cannot get metric interface - $interface";
+                return(undef)
+            }
+            $ret{'OutDiscards'} = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.19' . $interface);
+            if (!defined($ret{'OutDiscards'})) {
+                $LASTERROR = "Cannot get metric interface - $interface";
+                return(undef)
+            }
+        }
+        if ($params{'Errors'}) {
+            $ret{'InErrors'}  = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.14' . $interface);
+            if (!defined($ret{'InErrors'})) {
+                $LASTERROR = "Cannot get metric interface - $interface";
+                return(undef)
+            }
+            $ret{'OutErrors'} = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.20' . $interface);
+            if (!defined($ret{'OutErrors'})) {
+                $LASTERROR = "Cannot get metric interface - $interface";
+                return(undef)
+            }
+        }
+        if ($params{'Unknowns'}) {
+            $ret{'InUnknowns'}  = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.15' . $interface);
+            if (!defined($ret{'InUnknowns'})) {
+                $LASTERROR = "Cannot get metric interface - $interface";
+                return(undef)
+            }
+        }
+
+        for my $idx (0..$#{$ret{'Index'}}) {
+            my %IfMetricHash;
+            $IfMetricHash{'InMulticasts'}  = $ret{'InMulticasts'}->[$idx];
+            $IfMetricHash{'OutMulticasts'} = $ret{'OutMulticasts'}->[$idx];
+            $IfMetricHash{'InBroadcasts'}  = $ret{'InBroadcasts'}->[$idx];
+            $IfMetricHash{'OutBroadcasts'} = $ret{'OutBroadcasts'}->[$idx];
+            $IfMetricHash{'InOctets'}      = $ret{'InOctets'}->[$idx];
+            $IfMetricHash{'OutOctets'}     = $ret{'OutOctets'}->[$idx];
+            $IfMetricHash{'InUnicasts'}    = $ret{'InUnicasts'}->[$idx];
+            $IfMetricHash{'OutUnicasts'}   = $ret{'OutUnicasts'}->[$idx];
+            $IfMetricHash{'InDiscards'}    = $ret{'InDiscards'}->[$idx];
+            $IfMetricHash{'OutDiscards'}   = $ret{'OutDiscards'}->[$idx];
+            $IfMetricHash{'InErrors'}      = $ret{'InErrors'}->[$idx];
+            $IfMetricHash{'OutErrors'}     = $ret{'OutErrors'}->[$idx];
+            $IfMetricHash{'InUnknowns'}    = $ret{'InUnknowns'}->[$idx];
+            $IfMetric{$ret{'Index'}->[$idx]} = bless \%IfMetricHash
+        }
+    }
+    return bless \%IfMetric, $class
+}
+
+sub interface_utilization {
+    my $self  = shift;
+    my $class = ref($self) || $self;
+
+    my $session = $self->{'_SESSION_'};
+
+    my %params = (
+        'polling' => 10
+    );
+
+    my %args;
+    if (@_ != 1) {
+        %args = @_;
+        for (keys(%args)) {
+            if ((/^-?polling$/i) || (/^-?interval$/i)) {
+                if (($args{$_} =~ /^\d+$/) && ($args{$_} > 0)) {
+                    $params{'polling'} = $args{$_}
+                } else {
+                    $LASTERROR = "Incorrect polling interval - $args{$_}";
+                    return(undef)
+                }
+            } elsif (/^-?recursive$/i) {
+                $params{'recur'} = $args{$_}
+            }
+        }
+    }
+
+    my $prev;
+    if (exists($params{'recur'}) && (ref($params{'recur'}) eq __PACKAGE__)) {
+        $prev = $params{'recur'}
+    } else {
+        if (!defined($prev = $self->interface_metrics(@_))) {
+            $LASTERROR = "Cannot get initial utilization - " . $LASTERROR;
+            return(undef)
+        }
+    }
+    sleep $params{'polling'};
+    my $curr;
+    if (!defined($curr = $self->interface_metrics(@_))) {
+        $LASTERROR = "Cannot get current utilization - " . $LASTERROR;
+        return(undef)
+    }
+
+    my %IfUtil;
+    for my $ifs (sort {$a <=> $b} (keys(%{$prev}))) {
+        my %IfUtilHash;
+        $IfUtilHash{'InMulticasts'}  = defined($curr->{$ifs}->{'InMulticasts'}) ? ($curr->{$ifs}->{'InMulticasts'} - $prev->{$ifs}->{'InMulticasts'}) / $params{'polling'} : undef;
+        $IfUtilHash{'OutMulticasts'} = defined($curr->{$ifs}->{'OutMulticasts'}) ? ($curr->{$ifs}->{'OutMulticasts'} - $prev->{$ifs}->{'OutMulticasts'}) / $params{'polling'} : undef;
+        $IfUtilHash{'InBroadcasts'}  = defined($curr->{$ifs}->{'InBroadcasts'}) ? ($curr->{$ifs}->{'InBroadcasts'} - $prev->{$ifs}->{'InBroadcasts'}) / $params{'polling'} : undef;
+        $IfUtilHash{'OutBroadcasts'} = defined($curr->{$ifs}->{'OutBroadcasts'}) ? ($curr->{$ifs}->{'OutBroadcasts'} - $prev->{$ifs}->{'OutBroadcasts'}) / $params{'polling'} : undef;
+        $IfUtilHash{'InOctets'}      = defined($curr->{$ifs}->{'InOctets'}) ? (($curr->{$ifs}->{'InOctets'} - $prev->{$ifs}->{'InOctets'}) * 8) / $params{'polling'} : undef;
+        $IfUtilHash{'OutOctets'}     = defined($curr->{$ifs}->{'OutOctets'}) ? (($curr->{$ifs}->{'OutOctets'} - $prev->{$ifs}->{'OutOctets'}) * 8) / $params{'polling'} : undef;
+        $IfUtilHash{'InUnicasts'}    = defined($curr->{$ifs}->{'InUnicasts'}) ? ($curr->{$ifs}->{'InUnicasts'} - $prev->{$ifs}->{'InUnicasts'}) / $params{'polling'} : undef;
+        $IfUtilHash{'OutUnicasts'}   = defined($curr->{$ifs}->{'OutUnicasts'}) ? ($curr->{$ifs}->{'OutUnicasts'} - $prev->{$ifs}->{'OutUnicasts'}) / $params{'polling'} : undef;
+        $IfUtilHash{'InDiscards'}    = defined($curr->{$ifs}->{'InDiscards'}) ? ($curr->{$ifs}->{'InDiscards'} - $prev->{$ifs}->{'InDiscards'}) / $params{'polling'} : undef;
+        $IfUtilHash{'OutDiscards'}   = defined($curr->{$ifs}->{'OutDiscards'}) ? ($curr->{$ifs}->{'OutDiscards'} - $prev->{$ifs}->{'OutDiscards'}) / $params{'polling'} : undef;
+        $IfUtilHash{'InErrors'}      = defined($curr->{$ifs}->{'InErrors'}) ? ($curr->{$ifs}->{'InErrors'} - $prev->{$ifs}->{'InErrors'}) / $params{'polling'} : undef;
+        $IfUtilHash{'OutErrors'}     = defined($curr->{$ifs}->{'OutErrors'}) ? ($curr->{$ifs}->{'OutErrors'} - $prev->{$ifs}->{'OutErrors'}) / $params{'polling'} : undef;
+        $IfUtilHash{'InUnknowns'}    = defined($curr->{$ifs}->{'InUnknowns'}) ? ($curr->{$ifs}->{'InUnknowns'} - $prev->{$ifs}->{'InUnknowns'}) / $params{'polling'} : undef;
+        $IfUtil{$ifs} = bless \%IfUtilHash
+    }
+    $prev = bless \%IfUtil, $class;
+    return wantarray ? ($prev, $curr) : $prev 
 }
 
 sub interface_updown {
@@ -725,31 +992,14 @@ sub line_info {
 
     my $session = $self->{'_SESSION_'};
 
-    my $Number     = &_snmpgetnext($session, '1.3.6.1.4.1.9.2.9.2.1.20');
-    if (!defined($Number)) {
-        $LASTERROR = "Cannot get line info";
-        return(undef)
+    my %ret;
+    for my $oid (1..21) {
+        $ret{$LINEKEYS[$oid-1]} = &_snmpgetnext($session, '1.3.6.1.4.1.9.2.9.2.1.' . $oid);
+        if (!defined($ret{$LINEKEYS[$oid-1]})) {
+            $LASTERROR = "Cannot get line info - 1.3.6.1.4.1.9.2.9.2.1.$oid";
+            return(undef)
+        }
     }
-    my $TimeActive = &_snmpgetnext($session, '1.3.6.1.4.1.9.2.9.2.1.21');
-    my $Noise      = &_snmpgetnext($session, '1.3.6.1.4.1.9.2.9.2.1.19');
-    my $User       = &_snmpgetnext($session, '1.3.6.1.4.1.9.2.9.2.1.18');
-    my $Nses       = &_snmpgetnext($session, '1.3.6.1.4.1.9.2.9.2.1.17');
-    my $Uses       = &_snmpgetnext($session, '1.3.6.1.4.1.9.2.9.2.1.16');
-    my $Rotary     = &_snmpgetnext($session, '1.3.6.1.4.1.9.2.9.2.1.15');
-    my $Sestmo     = &_snmpgetnext($session, '1.3.6.1.4.1.9.2.9.2.1.14');
-    my $Tmo        = &_snmpgetnext($session, '1.3.6.1.4.1.9.2.9.2.1.13');
-    my $Esc        = &_snmpgetnext($session, '1.3.6.1.4.1.9.2.9.2.1.12');
-    my $Scrwid     = &_snmpgetnext($session, '1.3.6.1.4.1.9.2.9.2.1.11');
-    my $Scrlen     = &_snmpgetnext($session, '1.3.6.1.4.1.9.2.9.2.1.10');
-    my $Term       = &_snmpgetnext($session, '1.3.6.1.4.1.9.2.9.2.1.9');
-    my $Loc        = &_snmpgetnext($session, '1.3.6.1.4.1.9.2.9.2.1.8');
-    my $Modem      = &_snmpgetnext($session, '1.3.6.1.4.1.9.2.9.2.1.7');
-    my $Flow       = &_snmpgetnext($session, '1.3.6.1.4.1.9.2.9.2.1.6');
-    my $Speedout   = &_snmpgetnext($session, '1.3.6.1.4.1.9.2.9.2.1.5');
-    my $Speedin    = &_snmpgetnext($session, '1.3.6.1.4.1.9.2.9.2.1.4');
-    my $Autobaud   = &_snmpgetnext($session, '1.3.6.1.4.1.9.2.9.2.1.3');
-    my $Type       = &_snmpgetnext($session, '1.3.6.1.4.1.9.2.9.2.1.2');
-    my $Active     = &_snmpgetnext($session, '1.3.6.1.4.1.9.2.9.2.1.1');
 
     my %LineTypes = (
         2 => 'CON',
@@ -776,82 +1026,81 @@ sub line_info {
         8 => 'hw-both'
     );
     my %LineInfo;
-    for my $lines (0..$#{$Number}) {
+    for my $lines (0..$#{$ret{$LINEKEYS[19]}}) {
         my %LineInfoHash;
-        $LineInfoHash{'Number'}     = $Number->[$lines];
-        $LineInfoHash{'TimeActive'} = $TimeActive->[$lines];
-        $LineInfoHash{'Noise'}      = $Noise->[$lines];
-        $LineInfoHash{'User'}       = $User->[$lines];
-        $LineInfoHash{'Nses'}       = $Nses->[$lines];
-        $LineInfoHash{'Uses'}       = $Uses->[$lines];
-        $LineInfoHash{'Rotary'}     = $Rotary->[$lines];
-        $LineInfoHash{'Sestmo'}     = $Sestmo->[$lines];
-        $LineInfoHash{'Tmo'}        = $Tmo->[$lines];
-        $LineInfoHash{'Esc'}        = $Esc->[$lines];
-        $LineInfoHash{'Scrwid'}     = $Scrwid->[$lines];
-        $LineInfoHash{'Scrlen'}     = $Scrlen->[$lines];
-        $LineInfoHash{'Term'}       = $Term->[$lines];
-        $LineInfoHash{'Loc'}        = $Loc->[$lines];
-        $LineInfoHash{'Modem'}      = exists($LineModem{$Modem->[$lines]}) ? $LineModem{$Modem->[$lines]} : $Modem->[$lines];
-        $LineInfoHash{'Flow'}       = exists($LineFlow{$Flow->[$lines]}) ? $LineFlow{$Flow->[$lines]} : $Flow->[$lines];
-        $LineInfoHash{'Speedout'}   = $Speedout->[$lines];
-        $LineInfoHash{'Speedin'}    = $Speedin->[$lines];
-        $LineInfoHash{'Autobaud'}   = $Autobaud->[$lines];
-        $LineInfoHash{'Type'}       = exists($LineTypes{$Type->[$lines]}) ? $LineTypes{$Type->[$lines]} : $Type->[$lines];
-        $LineInfoHash{'Active'}     = $Active->[$lines];
-        if ($Active->[$lines] == 1) {
-            my $SesSession = &_snmpgetnext($session, '1.3.6.1.4.1.9.2.9.3.1.8.' . $Number->[$lines]);
-            my $SesLine    = &_snmpgetnext($session, '1.3.6.1.4.1.9.2.9.3.1.7.' . $Number->[$lines]);
-            my $SesIdle    = &_snmpgetnext($session, '1.3.6.1.4.1.9.2.9.3.1.6.' . $Number->[$lines]);
-            my $SesCur     = &_snmpgetnext($session, '1.3.6.1.4.1.9.2.9.3.1.5.' . $Number->[$lines]);
-            my $SesName    = &_snmpgetnext($session, '1.3.6.1.4.1.9.2.9.3.1.4.' . $Number->[$lines]);
-            my $SesAddr    = &_snmpgetnext($session, '1.3.6.1.4.1.9.2.9.3.1.3.' . $Number->[$lines]);
-            my $SesDir     = &_snmpgetnext($session, '1.3.6.1.4.1.9.2.9.3.1.2.' . $Number->[$lines]);
-            my $SesType    = &_snmpgetnext($session, '1.3.6.1.4.1.9.2.9.3.1.1.' . $Number->[$lines]);
-
-            my %SessionTypes = (
-                1 => 'unknown',
-                2 => 'PAD',
-                3 => 'stream',
-                4 => 'rlogin',
-                5 => 'telnet',
-                6 => 'TCP',
-                7 => 'LAT',
-                8 => 'MOP',
-                9 => 'SLIP',
-                10 => 'XRemote',
-                11 => 'rshell'
-            );
-            my %SessionDir = (
-                1 => 'unknown',
-                2 => 'IN',
-                3 => 'OUT'
-            );
-            my %SessionInfo;
-            for my $sess (0..$#{$SesSession}) {
-                my %SessionInfoHash;
-                $SessionInfoHash{'Session'} = $SesSession->[$sess];
-                $SessionInfoHash{'Line'}    = $SesLine->[$sess];
-                $SessionInfoHash{'Idle'}    = $SesIdle->[$sess];
-                $SessionInfoHash{'Cur'}     = $SesCur->[$sess];
-                $SessionInfoHash{'Name'}    = $SesName->[$sess];
-                $SessionInfoHash{'Addr'}    = $SesAddr->[$sess];
-                $SessionInfoHash{'Dir'}     = exists($SessionDir{$SesDir->[$sess]}) ? $SessionDir{$SesDir->[$sess]} : $SesDir->[$sess];
-                $SessionInfoHash{'Type'}    = exists($SessionTypes{$SesType->[$sess]}) ? $SessionTypes{$SesType->[$sess]} : $SesType->[$sess];
-#                $SessionInfo{$SesSession->[$sess]} = \%SessionInfoHash
-                push @{$SessionInfo{$Number->[$lines]}}, \%SessionInfoHash
-            }
-#            $LineInfoHash{'_SESSIONINFO_'} = \%SessionInfo
-            $LineInfoHash{'_SESSIONINFO_'} = $SessionInfo{$Number->[$lines]}
-        }
-        $LineInfo{$Number->[$lines]} = bless \%LineInfoHash
+        $LineInfoHash{$LINEKEYS[20]} = $ret{$LINEKEYS[20]}->[$lines];
+        $LineInfoHash{$LINEKEYS[19]} = $ret{$LINEKEYS[19]}->[$lines];
+        $LineInfoHash{$LINEKEYS[18]} = $ret{$LINEKEYS[18]}->[$lines];
+        $LineInfoHash{$LINEKEYS[17]} = $ret{$LINEKEYS[17]}->[$lines];
+        $LineInfoHash{$LINEKEYS[16]} = $ret{$LINEKEYS[16]}->[$lines];
+        $LineInfoHash{$LINEKEYS[15]} = $ret{$LINEKEYS[15]}->[$lines];
+        $LineInfoHash{$LINEKEYS[14]} = $ret{$LINEKEYS[14]}->[$lines];
+        $LineInfoHash{$LINEKEYS[13]} = $ret{$LINEKEYS[13]}->[$lines];
+        $LineInfoHash{$LINEKEYS[12]} = $ret{$LINEKEYS[12]}->[$lines];
+        $LineInfoHash{$LINEKEYS[11]} = $ret{$LINEKEYS[11]}->[$lines];
+        $LineInfoHash{$LINEKEYS[10]} = $ret{$LINEKEYS[10]}->[$lines];
+        $LineInfoHash{$LINEKEYS[9]}  = $ret{$LINEKEYS[9]}->[$lines];
+        $LineInfoHash{$LINEKEYS[8]}  = $ret{$LINEKEYS[8]}->[$lines];
+        $LineInfoHash{$LINEKEYS[7]}  = $ret{$LINEKEYS[7]}->[$lines];
+        $LineInfoHash{$LINEKEYS[6]}  = exists($LineModem{$ret{$LINEKEYS[6]}->[$lines]}) ? $LineModem{$ret{$LINEKEYS[6]}->[$lines]} : $ret{$LINEKEYS[6]}->[$lines];
+        $LineInfoHash{$LINEKEYS[5]}  = exists($LineFlow{$ret{$LINEKEYS[5]}->[$lines]}) ? $LineFlow{$ret{$LINEKEYS[5]}->[$lines]} : $ret{$LINEKEYS[5]}->[$lines];
+        $LineInfoHash{$LINEKEYS[4]}  = $ret{$LINEKEYS[4]}->[$lines];
+        $LineInfoHash{$LINEKEYS[3]}  = $ret{$LINEKEYS[3]}->[$lines];
+        $LineInfoHash{$LINEKEYS[2]}  = $ret{$LINEKEYS[2]}->[$lines];
+        $LineInfoHash{$LINEKEYS[1]}  = exists($LineTypes{$ret{$LINEKEYS[1]}->[$lines]}) ? $LineTypes{$ret{$LINEKEYS[1]}->[$lines]} : $ret{$LINEKEYS[1]}->[$lines];
+        $LineInfoHash{$LINEKEYS[0]}  = $ret{$LINEKEYS[0]}->[$lines];
+        $LineInfo{$ret{$LINEKEYS[19]}->[$lines]} = bless \%LineInfoHash
     }
     return bless \%LineInfo, $class
 }
 
-sub line_info_sessions {
+sub line_sessions {
     my $self  = shift;
-    return $self->{'_SESSIONINFO_'}
+    my $class = ref($self) || $self;
+
+    my $session = $self->{'_SESSION_'};
+
+    my %ret;
+    for my $oid (1..8) {
+        $ret{$SESSIONKEYS[$oid-1]} = &_snmpgetnext($session, '1.3.6.1.4.1.9.2.9.3.1.' . $oid);
+        if (!defined($ret{$SESSIONKEYS[$oid-1]})) {
+            $LASTERROR = "Cannot get session info - 1.3.6.1.4.1.9.2.9.3.1.$oid";
+            return(undef)
+        }
+    }
+
+    my %SessionTypes = (
+        1 => 'unknown',
+        2 => 'PAD',
+        3 => 'stream',
+        4 => 'rlogin',
+        5 => 'telnet',
+        6 => 'TCP',
+        7 => 'LAT',
+        8 => 'MOP',
+        9 => 'SLIP',
+        10 => 'XRemote',
+        11 => 'rshell'
+    );
+    my %SessionDir = (
+        1 => 'unknown',
+        2 => 'IN',
+        3 => 'OUT'
+    );
+    my %SessionInfo;
+    for my $sess (0..$#{$ret{$SESSIONKEYS[7]}}) {
+        my %SessionInfoHash;
+        $SessionInfoHash{$SESSIONKEYS[7]} = $ret{$SESSIONKEYS[7]}->[$sess];
+        $SessionInfoHash{$SESSIONKEYS[6]} = $ret{$SESSIONKEYS[6]}->[$sess];
+        $SessionInfoHash{$SESSIONKEYS[5]} = $ret{$SESSIONKEYS[5]}->[$sess];
+        $SessionInfoHash{$SESSIONKEYS[4]} = $ret{$SESSIONKEYS[4]}->[$sess];
+        $SessionInfoHash{$SESSIONKEYS[3]} = $ret{$SESSIONKEYS[3]}->[$sess];
+        $SessionInfoHash{$SESSIONKEYS[2]} = $ret{$SESSIONKEYS[2]}->[$sess];
+        $SessionInfoHash{$SESSIONKEYS[1]} = exists($SessionDir{$ret{$SESSIONKEYS[1]}->[$sess]}) ? $SessionDir{$ret{$SESSIONKEYS[1]}->[$sess]} : $ret{$SESSIONKEYS[1]}->[$sess];
+        $SessionInfoHash{$SESSIONKEYS[0]} = exists($SessionTypes{$ret{$SESSIONKEYS[0]}->[$sess]}) ? $SessionTypes{$ret{$SESSIONKEYS[0]}->[$sess]} : $ret{$SESSIONKEYS[0]}->[$sess];
+        push @{$SessionInfo{$ret{$SESSIONKEYS[6]}->[$sess]}}, \%SessionInfoHash
+    }
+    return bless \%SessionInfo, $class
 }
 
 sub line_message {
@@ -1371,13 +1620,16 @@ sub _snmpgetnext {
             last
         }
     }
-    if ($#vals == -1) {
-        return(undef)
-    } else {
-        return (\@oids, \@vals)
+    if ((@oids == 0) && (@vals == 0)) {
+        if (defined($result = $session->get_request($oid))) {
+            push @vals, $result->{$oid};
+            push @oids, $oid
+        } else {
+            return(undef)
+        }
     }
+    return (\@oids, \@vals)
 }
-
 
 ########################################################
 # End Private subs
@@ -1430,13 +1682,15 @@ Valid options are:
   $session = $cm->session;
 
 Return the Net::SNMP session object created by the Cisco::Management 
-new() method.  This is useful to call Net::SNMP related methods without 
+new() method.  This is useful to call Net::SNMP methods directly without 
 having to create a new Net::SNMP object.  For example:
 
-  my $cm = new Cisco::Management(-host      => 'router1',
+  my $cm = new Cisco::Management(
+                                 -host      => 'router1',
                                  -community => 'snmpRW'
-  );
+                                );
   my $session = $cm->session();
+  # get_request() is a Net::SNMP method
   $session->get_request('1.3.6.1.2.1.1.4.0');
 
 In this case, the C<get_request> call is a method provided by the 
@@ -1451,13 +1705,17 @@ Close the Cisco::Management session.
 
 =head2 error() - print last error
 
-  printf "Error: %s\n", Net::Syslogd->error;
+  printf "Error: %s\n", Cisco::Management->error;
 
 Return last error.
 
 =head2 Configuration Management Options
 
-The following methods are for configuration file management.
+The following methods are for configuration file management.  These 
+methods implement the C<CISCO-CONFIG-COPY-MIB> for configuration file 
+management.  If these operations fail, the older method in 
+C<OLD-CISCO-SYS-MIB> is tried.  All Catalyst OS operations are 
+performed against the C<CISCO-STACK-MIB>.
 
 =head2 config_copy() - configuration file management
 
@@ -1474,15 +1732,11 @@ startup-config or vice versa.  Valid options are:
              or filename on TFTP server
   -dest      'startup-config', 'running-config'     'startup-config'
              or filename for TFTP server
-  -catos     Catalyst OS flag                       0
+  -catos     Catalyst OS boolean flag.  Enable if   0
+             device runs Catalyst OS.
 
 The default behavior with no options is C<copy running-config 
 startup-config>.
-
-This method implements the C<CISCO-CONFIG-COPY-MIB> for configuration 
-file management.  If these operations fail, the older method in 
-C<OLD-CISCO-SYS-MIB> is tried.  All Catalyst OS operations are performed 
-against the C<CISCO-STACK-MIB>.
 
 B<NOTE:>  Use care when performing TFTP upload to startup-config.  This 
 B<MUST> be a B<FULL> configuration file as the config file is B<NOT>
@@ -1514,7 +1768,7 @@ implement the C<CISCO-PROCESS-MIB> and C<OLD-CISCO-SYS-MIB>.
   my $cpuinfo = $cm->cpu_info();
 
 Populate a data structure with CPU information.  If successful, 
-returns pointer to array containing CPU information.
+returns pointer to an array containing CPU information.
 
   $cpuinfo->[0]->{'Name', '5sec', '1min', ...}
   $cpuinfo->[1]->{'Name', '5sec', '1min', ...}
@@ -1530,8 +1784,8 @@ implement the C<IF-MIB>.
 
   my $line = $cm->interface_getbyindex([OPTIONS]);
 
-Resolve an ifIndex the full interface name.  Called with one argument, 
-interpreted as the interface ifIndex to resolve.
+Resolve an ifIndex to the full interface name.  Called with one 
+argument, interpreted as the interface ifIndex to resolve.
 
   Option     Description                            Default
   ------     -----------                            -------
@@ -1551,17 +1805,22 @@ as the interface string to resolve.
   Option     Description                            Default
   ------     -----------                            -------
   -interface String to resolve                      -REQUIRED-
-  -index     Return ifIndex number instead (flag)   0
+  -index     Return ifIndex instead (boolean)       0
 
-Returns the full interface name string or ifIndex (if -index flag).
+Returns a string with the full interface name or ifIndex - if C<-index> 
+boolean flag is set.
 
 =head2 interface_info() - return interface info
 
-  my $ifs = $cm->interface_info();
+  my $ifs = $cm->interface_info([OPTIONS]);
 
-Populate a data structure with interface information including IP 
-information if found.  If successful, returns pointer to hash 
-containing interface information.
+Populate a data structure with interface information.  Called with no 
+arguments, populates data structure for all interfaces.  Called with 
+one argument, interpreted as the interface(s) to retrieve information for.
+
+  Option     Description                            Default
+  ------     -----------                            -------
+  -interface ifIndex or range of ifIndex (, and -)  (all)
 
 Interface information consists of the following MIB entries (exludes 
 counter-type interface metrics):
@@ -1577,35 +1836,205 @@ counter-type interface metrics):
   OperStatus
   LastChange
 
-B<NOTE:>  Duplex is found in the C<EtherLike-MIB>.
+B<NOTE:>  Duplex is found in the C<EtherLike-MIB> and thus will not 
+be populated for non-Ethernet interface types.
+
+If successful, returns a pointer to a hash containing interface 
+information.
 
   $ifs->{1}->{'Index', 'Description', ...}
   $ifs->{2}->{'Index', 'Description', ...}
   ...
   $ifs->{n}->{'Index', 'Description', ...}
 
-IP information can be accessed directly or with the following method.
+=head2 interface_ip() - return IP info for interfaces
 
-=head3 interface_info_ip() - return IP info on current interface
+  my $ips = $cm->interface_ip();
 
-  my $ips = $ifs->{n}->interface_info_ip();
+Populate a data structure with the IP information per interface.  
+If successful, returns a pointer to a hash containing interface IP 
+information.
 
-Return a reference to an array containing the IP info for the current 
-interface.
-
-  my $ifs = $cm->interface_info();
+  $ips->{1}->[0]->{'IPAddress', 'IPMask'}
+             [1]->{'IPAddress', 'IPMask'}
+             ...
   ...
-  if (defined(my $ips = $ifs->{$_}->interface_info_ip())) {
-      $ips->[0]->{'IPAddress', 'IPMask'}
-      ...
-      $ips->[n]->{'IPAddress', 'IPMask'}
+  $ips->{n}->[0]->{'IPAddress', 'IPMask'}
+
+First hash value is the interface ifIndex, next array is the list of 
+current IP information per the interface ifIndex.
+
+=head2 interface_metrics() - return interface metrics
+
+  my $ifs = $cm->interface_metrics([OPTIONS]);
+
+Populate a data structure with interface metrics.
+
+B<NOTE:>  This method only provides the counter values - do B<NOT> 
+confuse this with I<utilization>.  This is the raw number of "metric" 
+types seen since the counter was last reset.
+
+Called with no arguments, populates data structure for all interfaces.  
+Called with one argument, interpreted as the interface(s) to retrieve 
+metrics for.
+
+  Option     Description                            Default
+  ------     -----------                            -------
+  -interface ifIndex or range of ifIndex (, and -)  (all)
+  -metrics   Metric or array of metrics to return   (all)
+             eg:    -metrics => 'octets'
+             eg:    -metrics => [octets, ...]
+               (or) -metrics => \@mets
+
+Interface metrics consist of the following MIB entries:
+
+  Multicasts   (count of packets in/out)
+  Broadcasts   (count of packets in/out)
+  Octets       (count of octets in/out)
+  Unicasts     (count of packets in/out)
+  Discards     (count of packets in/out)
+  Errors       (count of packets in/out)
+  Unknowns *   (count of packets in)
+
+B<NOTE:>  Providing an above value for C<-metrics> returns the I<In> 
+and I<Out> counter for the metric; except for I<Unknowns>, which does 
+not have an I<Out> counter.
+
+If successful, returns a pointer to a hash containing interface metrics.
+
+  $ifs->{1}->{'InMulticasts', 'OutMulticasts', 'InOctets', ...}
+  $ifs->{2}->{'InMulticasts', 'OutMulticasts', 'InOctets', ...}
+  ...
+  $ifs->{n}->{'InMulticasts', 'OutMulticasts', 'InOctets', ...}
+
+=head2 interface_utilization() - return interface utilization
+
+  my $ifs = $cm->interface_utilization([OPTIONS]);
+
+or
+
+  my ($ifs, $recur);
+  ($ifs, $recur) = $cm->interface_utilization(
+                                              [OPTIONS]
+                                              -recursive => $recur
+                                             );
+
+Populate a data structure with interface utilizations.
+
+B<NOTE:>  This method processes the counter values described in the 
+C<interface_metrics> method and returns utilizations in packets or 
+octets per second.  This is done by retrieving the metrics, waiting 
+for a 'polling interval' of time, retrieving the metrics again and 
+finally processing the utilizations, populating and returning the 
+data structure.
+
+Called with no arguments, populates data structure for all interfaces.  
+Called with one argument, interpreted as the interface(s) to retrieve 
+metrics for.
+
+  Option     Description                            Default
+  ------     -----------                            -------
+  -interface ifIndex or range of ifIndex (, and -)  (all)
+  -metrics   Metric or array of metrics to return   (all)
+             eg:    -metrics => 'octets'
+             eg:    -metrics => [octets, ...]
+               (or) -metrics => \@mets
+  -polling   The polling interval in seconds        10
+  -recursive Variable with previous results         -none-
+
+Interface utilizations consist of the following MIB entries:
+
+  Multicasts   (packets/second in/out)
+  Broadcasts   (packets/second in/out)
+  Octets       (bits/second in/out)
+  Unicasts     (packets/second in/out)
+  Discards     (packets/second in/out)
+  Errors       (packets/second in/out)
+  Unknowns *   (packets/second in)
+
+B<NOTE:>  Providing an above value for C<-metrics> returns the I<In> 
+and I<Out> utilization for the metric; except for I<Unknowns>, which 
+does not have an I<Out> counter.
+
+If successful, returns a pointer to a hash containing interface 
+utilizations.
+
+  $ifs->{1}->{'InMulticasts', 'OutMulticasts', 'InOctets', ...}
+  $ifs->{2}->{'InMulticasts', 'OutMulticasts', 'InOctets', ...}
+  ...
+  $ifs->{n}->{'InMulticasts', 'OutMulticasts', 'InOctets', ...}
+
+=head3 Notes on Interface Utilization
+
+As previously mentioned, interface utilization is computed by retrieving 
+interface metrics, waiting for a 'polling interval' of time, retrieving 
+interface metrics again and calculating the difference (and other math 
+in the case of octets).  To accomplish this, the following is executed:
+
+  User calls 'interface_utilization'
+
+    'interface_utilization' method calls 'interface_metrics' method
+    'interface_utilization' method waits for 'polling' seconds
+    'interface_utilization' method calls 'interface_metrics' method
+    'interface_utilization' method performs calculations and returns
+
+  User program continues
+
+This works well to get the interface utilization over a single polling 
+interval.  However, if the user program were to repeatedly obtain 
+interface utilization statistics (for example, using a while() loop), 
+this method can be improved.
+
+Consider for example:
+
+  my ($ifs, $recur);
+  while (1) {
+      ($ifs, $recur) = $cm->interface_utilization(
+                                                  -recursive => $recur
+                                                 );
+      printf "%i\n", $ifs->{'1'}->{InOctets}
+  }
+
+The C<-recursive> option along with an array return value ($ifs, $recur) 
+allows the user to specify 2 return values:  the first is the interface 
+utilization statistics, the second is the interface metrics retrieved 
+in the C<interface_utilization> method's second call to the 
+C<interface_metrics> method.  Upon first execution, this value is empty 
+and the C<interface_utilization> method calls C<interface_metrics> twice.  
+However, on subsequent calls to the C<interface_utilization> method, it 
+skips the first call to the C<interface_metrics> method and just uses 
+the previously obtained metrics found in $recur.  This streamlines the 
+utilization calculations by saving time, bandwidth and processing power 
+on both the device running this script and the device under test.
+
+To illustrate, assume we poll a device at 'T' polling intervals.  We 
+retrieve the metrics (M) at each interval and calculate the utilization 
+(U) for each interval.
+
+  |---- T ---|---- T ---|---- T ---|
+  M1         M2         M3         M4
+
+  Utilization 1 = M2 - M1
+  Utilization 2 = M3 - M2
+  Utilization 3 = M4 - M3
+
+B<WITHOUT> the C<-recursive> option, the following less efficient (but 
+still effective) operation occurs:
+
+   |---- T ---||---- T ---||---- T ---|
+  M1         M2M3        M4M5        M6
+
+  Utilization 1 = M2 - M1
+  Utilization 2 = M4 - M3
+  Utilization 3 = M6 - M5
 
 =head2 interface_updown() - admin up/down interface
 
   my $line = $cm->interface_updown([OPTIONS]);
 
-Admin up or down the interface.  With no arguments, all interfaces are 
-made admin up.
+Admin up or down the interface.  Called with no arguments, admin up 
+all interfaces.  Called with one argument, interpreted as the 
+interface(s) to admin up.
 
   Option     Description                            Default
   ------     -----------                            -------
@@ -1614,20 +2043,20 @@ made admin up.
 
 To specify individual interfaces, provide their number:
 
-  my $line = $cm->line_clear(2);
+  my $line = $cm->interface_updown(2);
 
 Admin up ifIndex 2.  To specify a range of interfaces, provide a 
 range:
 
-  my $line = $cm->line_clear(
-                             operation  => 'down',
-                             interfaces => '2-4,6,9-11'
-                            );
+  my $line = $cm->interface_updown(
+                                   -operation => 'down',
+                                   -interface => '2-4,6,9-11'
+                                  );
 
 Admin down ifIndex 2 3 4 6 9 10 11.
 
-Returns a pointer to an array containing the interfaces admin up/down 
-if successful.
+If successful, returns a pointer to an array containing the interfaces 
+admin up/down.
 
 =head2 Line Options
 
@@ -1640,81 +2069,75 @@ on some newer forms of IOS.
 
   my $line = $cm->line_clear([OPTIONS]);
 
-Clear the line (disconnect interactive session).  With no arguments, 
-all lines are cleared.  To specify individual lines, provide their 
-number:
+Clear the line (disconnect interactive session).  Called with no 
+arguments, clear all lines.  Called with one argument, interpreted as 
+the lines to clear.
+
+  Option     Description                            Default
+  ------     -----------                            -------
+  -lines     Line or range of lines (, and -)       (all)
+
+To specify individual lines, provide their number:
 
   my $line = $cm->line_clear(2);
-
-or
-
-  my $line = $cm->line_clear(lines => 2);
 
 Clear line 2.  To specify a range of lines, provide a range:
 
   my $line = $cm->line_clear('2-4,6,9-11');
 
-or
-
-  my $line = $cm->line_clear(range => '2-4,6,9-11');
-
 Clear lines 2 3 4 6 9 10 11.
 
-Returns a pointer to an array containing the lines cleared if 
-successful.
+If successful, returns a pointer to an array containing the lines cleared.
 
 =head2 line_info() - return line info
 
   my $line = $cm->line_info();
 
-Populate a data structure with line information including active 
-sessions if found.  If successful, returns pointer to hash containing 
-line information.
+Populate a data structure with line information.  If successful, 
+returns a pointer to a hash containing line information.
 
   $line->{0}->{'Number', 'TimeActive', ...}
   $line->{1}->{'Number', 'TimeActive', ...}
   ...
   $line->{n}->{'Number', 'TimeActive', ...}
 
-If the line is active, then session information is returned also.  It 
-can be accessed directly or with the following method.
+=head2 line_sessions() - return session info for lines
 
-=head3 line_info_sessions() - return session info on current line
+  my $session = $cm->line_sessions();
 
-  my $session = $line->{n}->line_info_sessions();
+Populate a data structure with the session information per line.  If 
+successful, returns a pointer to a hash containing session information.  
 
-Return a reference to an array containing the session info for the 
-current line.  Should be called on active line as in the following.
-
-  my $line = $cm->line_info();
+  $sessions->{1}->[0]->{'Session', 'Type', 'Dir' ...}
+                  [1]->{'Session', 'Type', 'Dir' ...}
+                  ...
   ...
-  if ($line->{$_}->{'Active'} == 1) {
-      my $sessions = $line->{$_}->line_info_sessions()
-      $sessions->[0]->{'Session', 'Type', 'Dir' ...}
-      ...
-      $sessions->[n]->{'Session', 'Type', 'Dir' ...}
+  $sessions->{n}->[0]->{'Session', 'Type', 'Dir' ...}
+
+First hash value is the line number, next array is the list of current 
+sessions per the line number.
 
 =head2 line_message() - send message to line
 
   my $line = $cm->line_message([OPTIONS]);
 
 Send a message to the line.  With no arguments, a "Test Message" is 
-sent to all lines.  If 1 argument is provided, it is interpreted as 
-the message to send to all lines.  Valid options are:
+sent to all lines.  If 1 argument is provided, interpreted as the 
+message to send to all lines.  Valid options are:
 
   Option     Description                            Default
   ------     -----------                            -------
   -lines     Line or range of lines (, and -)       (all)
   -message   Double-quote delimited string          "Test Message"
 
-Returns a pointer to an array containing the lines messaged if 
-successful.
+If successful, returns a pointer to an array containing the lines 
+messaged.
 
 =head2 line_numberof() - return number of lines
 
   my $line = $cm->line_numberof();
 
-Returns the number of lines on the device.
+If successful, returns the number of lines on the device.
 
 =head2 Memory Info
 
@@ -1726,7 +2149,7 @@ implement the C<CISCO-MEMORY-POOL-MIB>.
   my $meminfo = $cm->memory_info();
 
 Populate a data structure with memory information.  If successful, 
-returns pointer to array containing memory information.
+returns a pointer to an array containing memory information.
 
   $meminfo->[0]->{'Name', 'Used', 'Free', ...}
   $meminfo->[1]->{'Name', 'Used', 'Free', ...}
@@ -1745,7 +2168,7 @@ C<CISCO-PING-MIB>.
 Send proxy ping from the object defined in C<$cm> to the provided 
 destination.  Called with no options, sends the proxy ping to the 
 localhost.  Called with one argument, interpreted as the destination 
-to ping.  Valid options are:
+to proxy ping.  Valid options are:
 
   Option     Description                            Default
   ------     -----------                            -------
@@ -1792,8 +2215,7 @@ received in the current proxy ping execution.
 
 =head2 System Info
 
-The following methods interface with the System MIB defined in 
-C<SNMPv2-MIB>.
+The following methods implement the System MIB defined in C<SNMPv2-MIB>.
 
 =head2 system_info() - populate system info data structure.
 
@@ -1855,27 +2277,28 @@ Return the system OS version as parsed from the sysDescr OID.
 
 =head1 SUBROUTINES
 
-Password subroutines are for decrypting and encrypting 
-Cisco type 7 passwords.  The algorithm is freely available on the 
-Internet on several sites; thus, I can/will B<not> take credit for it.
+Password subroutines are for decrypting and encrypting Cisco type 7 
+passwords.  The algorithm is freely available on the Internet on 
+several sites; thus, I can/will B<NOT> take credit or B<ANY> liability 
+for its use.
 
 =head2 password_decrypt() - decrypt a Cisco type 7 password
 
-  my $passwd = Cisco::Password->password_decrypt('00071A150754');
+  my $passwd = Cisco::Management->password_decrypt('00071A150754');
 
 Where C<00071A150754> is the encrypted Cisco password in this example.
 
 =head2 password_encrypt() - encrypt a Cisco type 7 password
 
-  my $passwd = Cisco::Password->password_encrypt('cleartext'[,# | *]);
+  my $passwd = Cisco::Management->password_encrypt('cleartext'[,# | *]);
   print "$_\n" for (@{$passwd});
 
 Where C<cleartext> is the clear text string to encrypt.  The second 
 optional argument is a number in the range of 0 - 52 inclusive or 
 random text.
 
-This sub returns a pointer to an array.  The array is constructed based 
-on the second argument to C<password_encrypt>.  
+Returns a pointer to an array constructed based on the second argument 
+to C<password_encrypt>.  
 
   Option  Description            Action
   ------  -----------            -------
@@ -1886,8 +2309,8 @@ on the second argument to C<password_encrypt>.
 B<NOTE:>  Cisco routers by default only seem to use the first 16 indexes 
 (0 - 15) to encrypt passwords.  You notice this by looking at the first 
 two characters of any type 7 encrypted password in a Cisco router 
-configuration.  However, testing on IOS 12.x and later show that manually 
-entering a password encrypted with a higer index (generated from this 
+configuration.  However, testing on IOS 12.x and later shows that manually 
+entering a password encrypted with a higher index (generated from this 
 script) to a Cisco configuration will not only be allowed, but will 
 function normally for authentication.  This may be a form of "security 
 through obscurity" given that some older Cisco password decrypters don't 
@@ -1907,57 +2330,9 @@ None by default.
 
 =head1 EXAMPLES
 
-=head2 Configuration File Management
-
-This example connects to a device (router1) with SNMP read/write 
-community (readwrite) and performs a configuration file upload 
-via TFTP and if successful, a C<copy run start>.
-
-  use strict;
-  use Cisco::Management;
-
-  my $cm = Cisco::Management->new(
-                            hostname  => 'router1',
-                            community => 'readwrite'
-                           );
-
-  if (defined(my $conf = $cm->config_copy(
-                                          -tftp   => '10.10.10.1',
-                                          -source => 'foo.confg',
-                                          -dest   => 'run'
-                                         ))) {
-      printf "START: %s\n", $conf->config_copy_starttime();
-      printf "END  : %s\n", $conf->config_copy_endtime();
-
-      # Only if above successful, 
-      # Default action is "copy run start"
-      if (defined($conf = $cm->config_copy())) {
-          print "copy run start\n"
-      } else {
-          printf "Error: %s\n", Cisco::Management->error
-      }
-  } else {
-      printf "Error: %s\n", Cisco::Management->error
-  }
-
-  $cm->close();
-
-=head2 Cisco Password Decrypter
-
-This example implements a simple Cisco password decrypter.
-
-  use Cisco::Management;
-
-  if (!defined($ARGV[0])) {
-      print "Usage:  $0 encypted_password\n";
-      exit 1
-  }
-
-  if (my $passwd = Cisco::Management->password_decrypt($ARGV[0])) {
-      print "$passwd\n";
-  } else {
-      printf "Error - %s\n", Cisco::Management->error
-  }
+This distribution comes with several scripts (installed to the default 
+C<bin> install directory) that not only demonstrate example uses but also 
+provide functional execution.
 
 =head1 LICENSE
 

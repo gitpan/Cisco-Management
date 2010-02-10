@@ -3,13 +3,11 @@ Makefile.PL
 MANIFEST
 README
 bin/cisco-conf.pl
-bin/cisco-cpui.pl
+bin/cisco-info.pl
 bin/cisco-intf.pl
 bin/cisco-line.pl
-bin/cisco-memi.pl
 bin/cisco-pass.pl
 bin/cisco-ping.pl
-bin/cisco-sysi.pl
 t/00-Cisco-Management.t
 t/01-Cisco-Pass.t
 test.pl

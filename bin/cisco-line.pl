@@ -72,18 +72,20 @@ for (@ARGV) {
     if ((!defined($opt{'quantity'})) && 
         (!defined($opt{'message'} )) && 
         (!defined($opt{'clear'}   ))) {
-        if (defined(my $lines = $cm->line_info())) {        
+        if (defined(my $lines = $cm->line_info())) {
+            my $sessions = $cm->line_sessions();
             print "Line Type Active\n";
             print "----------------\n";
-            for (sort {$a <=> $b} (keys(%{$lines}))) {
+            for my $line (sort {$a <=> $b} (keys(%{$lines}))) {
                 printf "%4i %-5s   ", 
-                    $_, 
-                    $lines->{$_}->{Type};
-                if ($lines->{$_}->{Active} == 1) {
+                    $line, 
+                    $lines->{$line}->{Type};
+                if ($lines->{$line}->{Active} == 1) {
                     print "YES";
-                    my $sessions = $lines->{$_}->line_info_sessions();
-                    for (0..$#{$sessions}) {
-                        print " ($sessions->[$_]->{'Type'}://$sessions->[$_]->{'Addr'} [$sessions->[$_]->{'Dir'}])"
+                    if (exists($sessions->{$line})) {
+                        for (0..$#{$sessions->{$line}}) {
+                            print " ($sessions->{$line}->[$_]->{'Type'}://$sessions->{$line}->[$_]->{'Address'} [$sessions->{$line}->[$_]->{'Direction'}])"
+                        }
                     }
                 } else {
                     print " NO"

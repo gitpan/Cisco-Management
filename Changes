@@ -1,6 +1,23 @@
 Revision history for Perl extension Cisco::Management.
 
 0.01  Thu Jan 21 14:10:40 2010
-	- original version; created by h2xs 1.23 with options
-		-b 5.6.1 -v 0.01 -XAn Cisco::Management
+      - original version; created by h2xs 1.23 with options
+	      -b 5.6.1 -v 0.01 -XAn Cisco::Management
 
+0.02  Thu Feb  4 14:10:40 2010
+      - Fixed bugs in bin/cisco-intf.pl script.
+      - Changed line_info_sessions and interface_info_ip to 
+        'root' level methods so the line_info and interface_info 
+        methods do not need to be called before session and IP
+        information is available, respectively.
+            - Updated cisco-intf.pl and cisco-line.pl bin scripts 
+              to reflect this change.
+      - POD updates.
+            - Removed examples from 'Examples' POD section and 
+              instead referenced this distribution's included 
+              'bin' scripts.
+            - Cleaned up mistakes, typos and standardized.
+      - Consolidated bin scripts cisco-cpui.pl, cisco-memi.pl 
+        and cisco-sysi.pl into cisco-info.pl.
+      - Added interface_metrics method.
+      - Added interface_utilization method.
