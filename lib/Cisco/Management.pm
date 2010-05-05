@@ -16,7 +16,7 @@ use Sys::Hostname;
 use IO::Socket;
 use Net::SNMP qw(:asn1 :snmp DEBUG_ALL);
 
-our $VERSION      = '0.02';
+our $VERSION      = '0.03';
 our @ISA          = qw(Exporter);
 our @EXPORT       = qw();
 our %EXPORT_TAGS  = (
@@ -125,7 +125,7 @@ sub config_copy {
 
     my %args;
     if (@_ == 1) {
-        $LASTERROR = "Insufficient number of args - @_";
+        $LASTERROR = "Insufficient number of args: @_";
         return(undef)
     } else {
         %args = @_;
@@ -390,7 +390,7 @@ sub cpu_info {
             if (defined(my $result = $session->get_request( -varbindlist => ['1.3.6.1.2.1.47.1.1.1.1.7.' . $temp->[$_]] ))) {
                 $cpuName[$_] = $result->{'1.3.6.1.2.1.47.1.1.1.1.7.' . $temp->[$_]}
             } else {
-                $LASTERROR = "Cannot get CPU name for type $type";
+                $LASTERROR = "Cannot get CPU name for type: $cpuType{$type}";
                 return(undef)
             }
         }
@@ -435,7 +435,7 @@ sub interface_getbyindex {
     if (@_ == 1) {
         ($uIfx) = @_;
         if ($uIfx !~ /^\d+$/) {
-            $LASTERROR = "Not a valid index - $uIfx";
+            $LASTERROR = "Not a valid ifIndex: $uIfx";
             return(undef)
         }
     } else {
@@ -445,14 +445,14 @@ sub interface_getbyindex {
                 if ($args{$_} =~ /^\d+$/) {
                     $uIfx = $args{$_}
                 } else {
-                    $LASTERROR = "Not a valid index - $args{$_}";
+                    $LASTERROR = "Not a valid ifIndex: $args{$_}";
                     return(undef)
                 }
             }
         }
     }
     if (!defined($uIfx)) {
-        $LASTERROR = "No index provided";
+        $LASTERROR = "No ifIndex provided";
         return(undef)
     }
     my $rIf  = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.2');
@@ -467,7 +467,7 @@ sub interface_getbyindex {
             return $rIf->[$_]
         }
     }
-    $LASTERROR = "Cannot find interface for index - $uIfx";
+    $LASTERROR = "Cannot find interface for ifIndex: $uIfx";
     return(undef)
 }
 
@@ -534,7 +534,7 @@ sub interface_getbyname {
             return $idx
         }
     } elsif (@matches == 0) {
-        $LASTERROR = "Cannot find interface - $params{'uIf'}";
+        $LASTERROR = "Cannot find interface: $params{'uIf'}";
         return(undef)
     } else {
         print "Interface $params{'uIf'} not specific - [@matches]";
@@ -580,10 +580,10 @@ sub interface_info {
         }
 
         my %ret;
-        for my $oid (1..9) {
+        for my $oid (1..$#IFKEYS) {
             $ret{$IFKEYS[$oid-1]} = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.' . $oid . $interface);
             if (!defined($ret{$IFKEYS[$oid-1]})) {
-                $LASTERROR = "Cannot get interface info - 1.3.6.1.2.1.2.2.1.$oid$interface";
+                $LASTERROR = "Cannot get interface info: 1.3.6.1.2.1.2.2.1.$oid$interface";
                 return(undef)
             }
         }
@@ -615,7 +615,11 @@ sub interface_info {
             $IfInfoHash{$IFKEYS[6]} = exists($UpDownStatus{$ret{$IFKEYS[6]}->[$idx]}) ? $UpDownStatus{$ret{$IFKEYS[6]}->[$idx]} : $ret{$IFKEYS[6]}->[$idx];
             $IfInfoHash{$IFKEYS[7]} = exists($UpDownStatus{$ret{$IFKEYS[7]}->[$idx]}) ? $UpDownStatus{$ret{$IFKEYS[7]}->[$idx]} : $ret{$IFKEYS[7]}->[$idx];
             $IfInfoHash{$IFKEYS[8]} = $ret{$IFKEYS[8]}->[$idx];
-            $IfInfoHash{$IFKEYS[9]} = exists($DuplexType{$ret{$IFKEYS[9]}->[$idx]}) ? $DuplexType{$ret{$IFKEYS[9]}->[$idx]} : $ret{$IFKEYS[9]}->[$idx];
+            if (defined($ret{$IFKEYS[9]}->[$idx])) {
+                $IfInfoHash{$IFKEYS[9]} = exists($DuplexType{$ret{$IFKEYS[9]}->[$idx]}) ? $DuplexType{$ret{$IFKEYS[9]}->[$idx]} : $ret{$IFKEYS[9]}->[$idx];
+            } else {
+                $IfInfoHash{$IFKEYS[9]} = '';
+            }
             $IfInfo{$ret{$IFKEYS[0]}->[$idx]} = bless \%IfInfoHash
         }
     }
@@ -623,7 +627,7 @@ sub interface_info {
 }
 
 sub interface_ip {
-    my $self  = shift;
+    my ($self, $arg) = @_;
     my $class = ref($self) || $self;
 
     my $session = $self->{'_SESSION_'};
@@ -631,17 +635,35 @@ sub interface_ip {
     # IP Info
     my $IPIndex   = &_snmpgetnext($session, '1.3.6.1.2.1.4.20.1.2');
     if (!defined($IPIndex)) {
-        $LASTERROR = "Cannot get interface info (IP)";
+        $LASTERROR = "Cannot get interface IP info";
         return(undef)
     }
     my $IPAddress = &_snmpgetnext($session, '1.3.6.1.2.1.4.20.1.1');
     my $IPMask    = &_snmpgetnext($session, '1.3.6.1.2.1.4.20.1.3');
 
+    my %mask = (
+        "0.0.0.0"         => 0,  "128.0.0.0"       => 1,  "192.0.0.0"       => 2,
+        "224.0.0.0"       => 3,  "240.0.0.0"       => 4,  "248.0.0.0"       => 5,
+        "252.0.0.0"       => 6,  "254.0.0.0"       => 7,  "255.0.0.0"       => 8,
+        "255.128.0.0"     => 9,  "255.192.0.0"     => 10, "255.224.0.0"     => 11,
+        "255.240.0.0"     => 12, "255.248.0.0"     => 13, "255.252.0.0"     => 14,
+        "255.254.0.0"     => 15, "255.255.0.0"     => 16, "255.255.128.0"   => 17,
+        "255.255.192.0"   => 18, "255.255.224.0"   => 19, "255.255.240.0"   => 20,
+        "255.255.248.0"   => 21, "255.255.252.0"   => 22, "255.255.254.0"   => 23,
+        "255.255.255.0"   => 24, "255.255.255.128" => 25, "255.255.255.192" => 26,
+        "255.255.255.224" => 27, "255.255.255.240" => 28, "255.255.255.248" => 29,
+        "255.255.255.252" => 30, "255.255.255.254" => 31, "255.255.255.255" => 32
+    );
+
     my %IPInfo;
     for (0..$#{$IPIndex}) {
         my %IPInfoHash;
         $IPInfoHash{$IPKEYS[0]} = $IPAddress->[$_];
-        $IPInfoHash{$IPKEYS[1]} = $IPMask->[$_];
+        if (defined($arg) && ($arg >= 1)) {
+            $IPInfoHash{$IPKEYS[1]} = $mask{$IPMask->[$_]}
+        } else {
+            $IPInfoHash{$IPKEYS[1]} = $IPMask->[$_]
+        }
         push @{$IPInfo{$IPIndex->[$_]}}, \%IPInfoHash
     }
     return bless \%IPInfo, $class
@@ -683,7 +705,7 @@ sub interface_metrics {
                         if (exists($params{ucfirst(lc($mets))})) {
                             $params{ucfirst(lc($mets))} = 1
                         } else {
-                            $LASTERROR = "Invalid metric - $mets";
+                            $LASTERROR = "Invalid metric: $mets";
                             return(undef)
                         }
                     }
@@ -692,7 +714,7 @@ sub interface_metrics {
                     if (exists($params{ucfirst(lc($args{$_}))})) {
                         $params{ucfirst(lc($args{$_}))} = 1
                     } else {
-                        $LASTERROR = "Invalid metric - $args{$_}";
+                        $LASTERROR = "Invalid metric: $args{$_}";
                         return(undef)
                     }
                 }
@@ -713,85 +735,85 @@ sub interface_metrics {
         my %ret;
         $ret{'Index'} = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.1' . $interface);
         if (!defined($ret{'Index'})) {
-            $LASTERROR = "Cannot get index interface - $interface";
+            $LASTERROR = "Cannot get ifIndex: $interface";
             return(undef)
         }
         if ($params{'Multicasts'}) {
             $ret{'InMulticasts'}  = &_snmpgetnext($session, '1.3.6.1.2.1.31.1.1.1.2' . $interface);
             if (!defined($ret{'InMulticasts'})) {
-                $LASTERROR = "Cannot get metric interface - $interface";
+                $LASTERROR = "Cannot get InMulticasts interface: $interface";
                 return(undef)
             }
             $ret{'OutMulticasts'} = &_snmpgetnext($session, '1.3.6.1.2.1.31.1.1.1.4' . $interface);
             if (!defined($ret{'OutMulticasts'})) {
-                $LASTERROR = "Cannot get metric interface - $interface";
+                $LASTERROR = "Cannot get OutMulticasts interface: $interface";
                 return(undef)
             }
         }
         if ($params{'Broadcasts'}) {
             $ret{'InBroadcasts'}  = &_snmpgetnext($session, '1.3.6.1.2.1.31.1.1.1.3' . $interface);
             if (!defined($ret{'InBroadcasts'})) {
-                $LASTERROR = "Cannot get metric interface - $interface";
+                $LASTERROR = "Cannot get InBroadcasts interface: $interface";
                 return(undef)
             }
             $ret{'OutBroadcasts'} = &_snmpgetnext($session, '1.3.6.1.2.1.31.1.1.1.5' . $interface);
             if (!defined($ret{'OutBroadcasts'})) {
-                $LASTERROR = "Cannot get metric interface - $interface";
+                $LASTERROR = "Cannot get OutBroadcasts interface: $interface";
                 return(undef)
             }
         }
         if ($params{'Octets'}) {
             $ret{'InOctets'}  = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.10' . $interface);
             if (!defined($ret{'InOctets'})) {
-                $LASTERROR = "Cannot get metric interface - $interface";
+                $LASTERROR = "Cannot get InOctets interface: $interface";
                 return(undef)
             }
             $ret{'OutOctets'} = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.16' . $interface);
             if (!defined($ret{'OutOctets'})) {
-                $LASTERROR = "Cannot get metric interface - $interface";
+                $LASTERROR = "Cannot get OutOctets interface: $interface";
                 return(undef)
             }
         }
         if ($params{'Unicasts'}) {
             $ret{'InUnicasts'}  = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.11' . $interface);
             if (!defined($ret{'InUnicasts'})) {
-                $LASTERROR = "Cannot get metric interface - $interface";
+                $LASTERROR = "Cannot get InUnicasts interface: $interface";
                 return(undef)
             }
             $ret{'OutUnicasts'} = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.17' . $interface);
             if (!defined($ret{'OutUnicasts'})) {
-                $LASTERROR = "Cannot get metric interface - $interface";
+                $LASTERROR = "Cannot get OutUnicasts interface: $interface";
                 return(undef)
             }
         }
         if ($params{'Discards'}) {
             $ret{'InDiscards'}  = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.13' . $interface);
             if (!defined($ret{'InDiscards'})) {
-                $LASTERROR = "Cannot get metric interface - $interface";
+                $LASTERROR = "Cannot get InDiscards interface: $interface";
                 return(undef)
             }
             $ret{'OutDiscards'} = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.19' . $interface);
             if (!defined($ret{'OutDiscards'})) {
-                $LASTERROR = "Cannot get metric interface - $interface";
+                $LASTERROR = "Cannot get OutDiscards interface: $interface";
                 return(undef)
             }
         }
         if ($params{'Errors'}) {
             $ret{'InErrors'}  = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.14' . $interface);
             if (!defined($ret{'InErrors'})) {
-                $LASTERROR = "Cannot get metric interface - $interface";
+                $LASTERROR = "Cannot get InErrors interface: $interface";
                 return(undef)
             }
             $ret{'OutErrors'} = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.20' . $interface);
             if (!defined($ret{'OutErrors'})) {
-                $LASTERROR = "Cannot get metric interface - $interface";
+                $LASTERROR = "Cannot get OutErrors interface: $interface";
                 return(undef)
             }
         }
         if ($params{'Unknowns'}) {
             $ret{'InUnknowns'}  = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.15' . $interface);
             if (!defined($ret{'InUnknowns'})) {
-                $LASTERROR = "Cannot get metric interface - $interface";
+                $LASTERROR = "Cannot get InUnknowns interface: $interface";
                 return(undef)
             }
         }
@@ -835,7 +857,7 @@ sub interface_utilization {
                 if (($args{$_} =~ /^\d+$/) && ($args{$_} > 0)) {
                     $params{'polling'} = $args{$_}
                 } else {
-                    $LASTERROR = "Incorrect polling interval - $args{$_}";
+                    $LASTERROR = "Incorrect polling interval: $args{$_}";
                     return(undef)
                 }
             } elsif (/^-?recursive$/i) {
@@ -849,14 +871,14 @@ sub interface_utilization {
         $prev = $params{'recur'}
     } else {
         if (!defined($prev = $self->interface_metrics(@_))) {
-            $LASTERROR = "Cannot get initial utilization - " . $LASTERROR;
+            $LASTERROR = "Cannot get initial utilization: " . $LASTERROR;
             return(undef)
         }
     }
     sleep $params{'polling'};
     my $curr;
     if (!defined($curr = $self->interface_metrics(@_))) {
-        $LASTERROR = "Cannot get current utilization - " . $LASTERROR;
+        $LASTERROR = "Cannot get current utilization: " . $LASTERROR;
         return(undef)
     }
 
@@ -993,10 +1015,10 @@ sub line_info {
     my $session = $self->{'_SESSION_'};
 
     my %ret;
-    for my $oid (1..21) {
+    for my $oid (1..$#LINEKEYS + 1) {
         $ret{$LINEKEYS[$oid-1]} = &_snmpgetnext($session, '1.3.6.1.4.1.9.2.9.2.1.' . $oid);
         if (!defined($ret{$LINEKEYS[$oid-1]})) {
-            $LASTERROR = "Cannot get line info - 1.3.6.1.4.1.9.2.9.2.1.$oid";
+            $LASTERROR = "Cannot get line info: 1.3.6.1.4.1.9.2.9.2.1.$oid";
             return(undef)
         }
     }
@@ -1061,10 +1083,10 @@ sub line_sessions {
     my $session = $self->{'_SESSION_'};
 
     my %ret;
-    for my $oid (1..8) {
+    for my $oid (1..$#SESSIONKEYS + 1) {
         $ret{$SESSIONKEYS[$oid-1]} = &_snmpgetnext($session, '1.3.6.1.4.1.9.2.9.3.1.' . $oid);
         if (!defined($ret{$SESSIONKEYS[$oid-1]})) {
-            $LASTERROR = "Cannot get session info - 1.3.6.1.4.1.9.2.9.3.1.$oid";
+            $LASTERROR = "Cannot get session info: 1.3.6.1.4.1.9.2.9.3.1.$oid";
             return(undef)
         }
     }
@@ -1088,9 +1110,8 @@ sub line_sessions {
         3 => 'OUT'
     );
     my %SessionInfo;
-    for my $sess (0..$#{$ret{$SESSIONKEYS[7]}}) {
+    for my $sess (0..$#{$ret{$SESSIONKEYS[6]}}) {
         my %SessionInfoHash;
-        $SessionInfoHash{$SESSIONKEYS[7]} = $ret{$SESSIONKEYS[7]}->[$sess];
         $SessionInfoHash{$SESSIONKEYS[6]} = $ret{$SESSIONKEYS[6]}->[$sess];
         $SessionInfoHash{$SESSIONKEYS[5]} = $ret{$SESSIONKEYS[5]}->[$sess];
         $SessionInfoHash{$SESSIONKEYS[4]} = $ret{$SESSIONKEYS[4]}->[$sess];
@@ -1249,21 +1270,21 @@ sub proxy_ping {
                 if ($args{$_} =~ /^\d+$/) {
                     $params{'size'} = $args{$_}
                 } else {
-                    $LASTERROR = "Invalid size - $args{$_}";
+                    $LASTERROR = "Invalid size: $args{$_}";
                     return(undef)
                 }
             } elsif (/^-?count$/i) {
                 if ($args{$_} =~ /^\d+$/) {
                     $params{'count'} = $args{$_}
                 } else {
-                    $LASTERROR = "Invalid count - $args{$_}";
+                    $LASTERROR = "Invalid count: $args{$_}";
                     return(undef)
                 }
             } elsif ((/^-?wait$/i) || (/^-?timeout$/i)) {
                 if ($args{$_} =~ /^\d+$/) {
                     $params{'wait'} = $args{$_}
                 } else {
-                    $LASTERROR = "Invalid wait time - $args{$_}";
+                    $LASTERROR = "Invalid wait time: $args{$_}";
                     return(undef)
                 }
             } elsif (/^-?vrf(?:name)?$/i) {
@@ -1567,7 +1588,7 @@ sub _get_range {
     # If argument, it must be a number range in the form:
     #  1,9-11,7,3-5,15
     if ($opt !~ /^\d+([\,\-]\d+)*$/) {
-        $LASTERROR = "Incorrect range format";
+        $LASTERROR = "Incorrect range format: $opt";
         return(undef)
     }
 
@@ -1849,11 +1870,12 @@ information.
 
 =head2 interface_ip() - return IP info for interfaces
 
-  my $ips = $cm->interface_ip();
+  my $ips = $cm->interface_ip([1]);
 
 Populate a data structure with the IP information per interface.  
 If successful, returns a pointer to a hash containing interface IP 
-information.
+information.  For /xx instead of dotted-octet format for mask, use 
+the optional boolean argument.
 
   $ips->{1}->[0]->{'IPAddress', 'IPMask'}
              [1]->{'IPAddress', 'IPMask'}

@@ -110,7 +110,7 @@ my $error;
         ok(0, "Interface (admin up bad range)")
     } else {
         $error = $cm->error;
-        ok($error eq 'Incorrect range format', "Interface (admin up bad range)")
+        ok($error eq 'Incorrect range format: 100000 to 100002', "Interface (admin up bad range)")
     }
 
 # Interface Info

@@ -9,11 +9,11 @@ my %opt;
 my ($opt_help, $opt_man);
 
 GetOptions(
-  'community=s' => \$opt{'community'},
-  'Clear!'      => \$opt{'clear'},
-  'lines=s'     => \$opt{'lines'},
-  'message=s'   => \$opt{'message'},
-  'quantity!'   => \$opt{'quantity'},
+  'community=s' => \$opt{community},
+  'Clear!'      => \$opt{clear},
+  'lines=s'     => \$opt{lines},
+  'message=s'   => \$opt{message},
+  'quantity!'   => \$opt{quantity},
   'help!'       => \$opt_help,
   'man!'        => \$opt_man
 ) or pod2usage(-verbose => 0);
@@ -26,7 +26,7 @@ if (!@ARGV) {
     pod2usage(-verbose => 0, -message => "$0: host required\n")
 }
 
-$opt{'community'} = $opt{'community'} || 'private';
+$opt{community} = $opt{community} || 'private';
 
 for (@ARGV) {
     print "\n-- $_ --\n";
@@ -34,44 +34,44 @@ for (@ARGV) {
     my $cm;
     if (!defined($cm = Cisco::Management->new(
                               hostname  => $_,
-                              community => $opt{'community'}
+                              community => $opt{community}
                              ))) {
         printf "Error: %s\n", Cisco::Management->error;
         next
     }
 
-    if (defined($opt{'quantity'})) {
-        if (defined(my $lines = $cm->line_numberof())) {        
+    if (defined($opt{quantity})) {
+        if (defined(my $lines = $cm->line_numberof())) {
             print "$_: Lines = $lines\n"
         } else {
             printf "Error: %s\n", Cisco::Management->error
         }
     }
 
-    if (defined($opt{'message'})) {
+    if (defined($opt{message})) {
         my %params;
-        if (defined($opt{'lines'}))   { $params{'lines'}   = $opt{'lines'}   }
-        if (defined($opt{'message'})) { $params{'message'} = $opt{'message'} }
-        if (defined(my $lines = $cm->line_message(%params))) {        
+        if (defined($opt{lines}))   { $params{lines}   = $opt{lines}   }
+        if (defined($opt{message})) { $params{message} = $opt{message} }
+        if (defined(my $lines = $cm->line_message(%params))) {
             print "$_: Messaged lines = @{$lines}\n"
         } else {
             printf "Error: %s\n", Cisco::Management->error
         }
     }
 
-    if (defined($opt{'clear'})) {
+    if (defined($opt{clear})) {
         my %params;
-        if (defined($opt{'lines'})) { $params{'lines'} = $opt{'lines'} }
-        if (defined(my $lines = $cm->line_clear(%params))) {        
+        if (defined($opt{lines})) { $params{lines} = $opt{lines} }
+        if (defined(my $lines = $cm->line_clear(%params))) {
             print "$_: Cleared lines = @{$lines}\n"
         } else {
             printf "Error: %s\n", Cisco::Management->error
         }
     }
 
-    if ((!defined($opt{'quantity'})) && 
-        (!defined($opt{'message'} )) && 
-        (!defined($opt{'clear'}   ))) {
+    if ((!defined($opt{quantity})) && 
+        (!defined($opt{message} )) && 
+        (!defined($opt{clear}   ))) {
         if (defined(my $lines = $cm->line_info())) {
             my $sessions = $cm->line_sessions();
             print "Line Type Active\n";
@@ -84,7 +84,7 @@ for (@ARGV) {
                     print "YES";
                     if (exists($sessions->{$line})) {
                         for (0..$#{$sessions->{$line}}) {
-                            print " ($sessions->{$line}->[$_]->{'Type'}://$sessions->{$line}->[$_]->{'Address'} [$sessions->{$line}->[$_]->{'Direction'}])"
+                            print " ($sessions->{$line}->[$_]->{Type}://$sessions->{$line}->[$_]->{Address} [$sessions->{$line}->[$_]->{Direction}])"
                         }
                     }
                 } else {

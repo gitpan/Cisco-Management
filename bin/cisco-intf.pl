@@ -9,13 +9,13 @@ my %opt;
 my ($opt_help, $opt_man);
 
 GetOptions(
-  'community=s'   => \$opt{'community'},
-  'down!'         => \$opt{'down'},
-  'interfaces=s'  => \$opt{'interfaces'},
-  'metrics:s'     => \$opt{'metrics'},
-  'repeat!'       => \$opt{'repeat'},
-  'up!'           => \$opt{'up'},
-  'Utilization:i' => \$opt{'util'},
+  'community=s'   => \$opt{community},
+  'down!'         => \$opt{down},
+  'interfaces=s'  => \$opt{interfaces},
+  'metrics:s'     => \$opt{metrics},
+  'repeat!'       => \$opt{repeat},
+  'up!'           => \$opt{up},
+  'Utilization:i' => \$opt{util},
   'help!'         => \$opt_help,
   'man!'          => \$opt_man
 ) or pod2usage(-verbose => 0);
@@ -28,12 +28,12 @@ if (!@ARGV) {
     pod2usage(-verbose => 0, -message => "$0: host required\n")
 }
 
-$opt{'community'} = $opt{'community'} || 'private';
+$opt{community} = $opt{community} || 'private';
 
 my $oper;
-if (defined($opt{'up'})) {
+if (defined($opt{up})) {
     $oper = 'UP'
-} elsif (defined($opt{'down'})) {
+} elsif (defined($opt{down})) {
     $oper = 'DOWN'
 }
 
@@ -43,7 +43,7 @@ for (@ARGV) {
     my $cm;
     if (!defined($cm = Cisco::Management->new(
                               hostname  => $_,
-                              community => $opt{'community'}
+                              community => $opt{community}
                              ))) {
         printf "Error: %s\n", Cisco::Management->error;
         next
@@ -51,11 +51,11 @@ for (@ARGV) {
 
     my %params;
     my $ERROR = 0;
-    if (defined($opt{'interfaces'})) { 
+    if (defined($opt{interfaces})) {
 
-        if ($opt{'interfaces'} =~ /^[A-Za-z]/) {
+        if ($opt{interfaces} =~ /^[A-Za-z]/) {
             my @temp;
-            my @ifs = split /\s+/, $opt{'interfaces'};
+            my @ifs = split /\s+/, $opt{interfaces};
             for (@ifs) {
                 if (defined(my $if = $cm->interface_getbyname(interface => $_, index => 1))) {
                     push @temp, $if
@@ -65,28 +65,28 @@ for (@ARGV) {
                     last
                 }
             }
-            $params{'interfaces'} = join ',', @temp
+            $params{interfaces} = join ',', @temp
         } else {
-            $params{'interfaces'} = $opt{'interfaces'}
+            $params{interfaces} = $opt{interfaces}
         }
     }
 
     next if ($ERROR);
 
     if (defined($oper)) {
-        $params{'operation'}  = $oper;
-        if (defined(my $ifs = $cm->interface_updown(%params))) {        
+        $params{operation}  = $oper;
+        if (defined(my $ifs = $cm->interface_updown(%params))) {
             print "$_: Admin $oper interfaces = @{$ifs}\n"
         } else {
             printf "Error: %s\n", Cisco::Management->error
         }
-    } elsif (defined($opt{'metrics'}) && !defined($opt{'util'})) {
-        if ($opt{'metrics'} ne '') {
+    } elsif (defined($opt{metrics}) && !defined($opt{util})) {
+        if ($opt{metrics} ne '') {
             my @temp;
-            push @temp, split /\s+/, $opt{'metrics'};
-            $params{'metrics'} = \@temp
+            push @temp, split /\s+/, $opt{metrics};
+            $params{metrics} = \@temp
         }
-        if (defined(my $ifs = $cm->interface_metrics(%params))) {        
+        if (defined(my $ifs = $cm->interface_metrics(%params))) {
             print "Index Multi(I/O)  Broad(I/O)  Octets(I/O)\n";
             print "-----------------------------------------\n";
             for my $int (sort {$a <=> $b} (keys(%{$ifs}))) {
@@ -102,19 +102,19 @@ for (@ARGV) {
         } else {
             printf "Error: %s\n", Cisco::Management->error
         }
-    } elsif (defined($opt{'util'})) {
-        if ($opt{'util'} > 0) { $params{'polling'} = $opt{'util'} }
-        if (defined($opt{'metrics'}) && $opt{'metrics'} ne '') {
+    } elsif (defined($opt{util})) {
+        if ($opt{util} > 0) { $params{polling} = $opt{util} }
+        if (defined($opt{metrics}) && $opt{metrics} ne '') {
             my @temp;
-            push @temp, split /\s+/, $opt{'metrics'};
-            $params{'metrics'} = \@temp
+            push @temp, split /\s+/, $opt{metrics};
+            $params{metrics} = \@temp
         }
 
         print "Index Multi(I/O)  Broad(I/O)  Octets(I/O)\n";
         print "      packets/s   packets/s     bits/s\n";
 
         my $stopRepeat = 0;
-        $SIG{'INT'} = sub {
+        $SIG{INT} = sub {
             print "SIGINT! - Stop\n";
             $stopRepeat = 1
         };
@@ -123,8 +123,9 @@ for (@ARGV) {
         my $GO = 1;
         while ($GO) {
             my $ifs;
-            $params{'recursive'} = $recur;
-            if (defined(($ifs, $recur) = $cm->interface_utilization(%params))) {        
+            $params{recursive} = $recur;
+            ($ifs, $recur) = $cm->interface_utilization(%params);
+            if (defined($ifs)) {
                 print "-----------------------------------------\n";
                 for my $int (sort {$a <=> $b} (keys(%{$ifs}))) {
                     printf "%5i %5s/%-5s %5s/%-5s %5s/%-5s\n", 
@@ -139,10 +140,10 @@ for (@ARGV) {
             } else {
                 printf "Error: %s\n", Cisco::Management->error
             }
-            if (!defined($opt{'repeat'}) || $stopRepeat) { last }
+            if (!defined($opt{repeat}) || $stopRepeat) { last }
         }
     } else {
-        if (defined(my $ifs = $cm->interface_info(%params))) {        
+        if (defined(my $ifs = $cm->interface_info(%params))) {
             my $ips = $cm->interface_ip();
             print "Index Description               Speed/Duplex Admin/Oper IP(s)\n";
             print "--------------------------------------------------------------\n";
@@ -156,7 +157,7 @@ for (@ARGV) {
                     $ifs->{$int}->{OperStatus};
                     if (exists($ips->{$int})) {
                         for (0..$#{$ips->{$int}}) {
-                            print " $ips->{$int}->[$_]->{'IPAddress'}"
+                            print " $ips->{$int}->[$_]->{IPAddress}"
                         }
                     }
                 print "\n"

@@ -9,11 +9,11 @@ my %opt;
 my ($opt_help, $opt_man);
 
 GetOptions(
-  'community=s' => \$opt{'community'},
-  'dest=s'      => \$opt{'dest'},
-  'source=s'    => \$opt{'source'},
-  'tftp=s'      => \$opt{'tftp'},
-  'write!'      => \$opt{'write'},
+  'community=s' => \$opt{community},
+  'dest=s'      => \$opt{dest},
+  'source=s'    => \$opt{source},
+  'tftp=s'      => \$opt{tftp},
+  'write!'      => \$opt{write},
   'help!'       => \$opt_help,
   'man!'        => \$opt_man
 ) or pod2usage(-verbose => 0);
@@ -26,22 +26,22 @@ if (!@ARGV) {
     pod2usage(-verbose => 0, -message => "$0: host required\n")
 }
 
-$opt{'community'} = $opt{'community'} || 'private';
-$opt{'dest'}      = $opt{'dest'}      || 'start';
-$opt{'source'}    = $opt{'source'}    || 'run';
+$opt{community} = $opt{community} || 'private';
+$opt{dest}      = $opt{dest}      || 'start';
+$opt{source}    = $opt{source}    || 'run';
 
-if (($opt{'dest'}   !~ /^run(?:ning)?(?:-config)?$/i) &&
-    ($opt{'dest'}   !~ /^start(?:up)?(?:-config)?$/i) &&
-    ($opt{'source'} !~ /^run(?:ning)?(?:-config)?$/i) &&
-    ($opt{'source'} !~ /^start(?:up)?(?:-config)?$/i)) {
+if (($opt{dest}   !~ /^run(?:ning)?(?:-config)?$/i) &&
+    ($opt{dest}   !~ /^start(?:up)?(?:-config)?$/i) &&
+    ($opt{source} !~ /^run(?:ning)?(?:-config)?$/i) &&
+    ($opt{source} !~ /^start(?:up)?(?:-config)?$/i)) {
     print "$0: source or dest must be run or start\n";
     exit 1
 }
 
-if (((($opt{'dest'}   !~ /^run(?:ning)?(?:-config)?$/i) &&
-      ($opt{'dest'}   !~ /^start(?:up)?(?:-config)?$/i)) ||
-     (($opt{'source'} !~ /^run(?:ning)?(?:-config)?$/i) &&
-      ($opt{'source'} !~ /^start(?:up)?(?:-config)?$/i))) && (!defined($opt{'tftp'}))) {
+if (((($opt{dest}   !~ /^run(?:ning)?(?:-config)?$/i) &&
+      ($opt{dest}   !~ /^start(?:up)?(?:-config)?$/i)) ||
+     (($opt{source} !~ /^run(?:ning)?(?:-config)?$/i) &&
+      ($opt{source} !~ /^start(?:up)?(?:-config)?$/i))) && (!defined($opt{tftp}))) {
     print "$0: TFTP required for source or dest not run or start\n";
     exit 1
 }
@@ -52,18 +52,18 @@ for (@ARGV) {
     my $cm;
     if (!defined($cm = Cisco::Management->new(
                               hostname  => $_,
-                              community => $opt{'community'}
+                              community => $opt{community}
                              ))) {
         printf "Error: %s\n", Cisco::Management->error;
         next
     }
 
-    if (!defined($opt{'tftp'})) {
+    if (!defined($opt{tftp})) {
         if (defined(my $conf = $cm->config_copy(
-                                                -source => $opt{'source'},
-                                                -dest   => $opt{'dest'}
-                                               ))) {        
-            print "$_: copy $opt{'source'} $opt{'dest'}\n"
+                                                -source => $opt{source},
+                                                -dest   => $opt{dest}
+                                               ))) {
+            print "$_: copy $opt{source} $opt{dest}\n"
         } else {
             printf "Error: %s\n", Cisco::Management->error
         }
@@ -71,20 +71,20 @@ for (@ARGV) {
     }
 
     if (defined(my $conf = $cm->config_copy(
-                                            -tftp   => $opt{'tftp'},
-                                            -source => $opt{'source'},
-                                            -dest   => $opt{'dest'}
+                                            -tftp   => $opt{tftp},
+                                            -source => $opt{source},
+                                            -dest   => $opt{dest}
                                            ))) {
-        my $src  = $opt{'source'};
-        my $dest = $opt{'dest'};
-        if (($opt{'dest'} !~ /^run(?:ning)?(?:-config)?$/i) &&
-            ($opt{'dest'} !~ /^start(?:up)?(?:-config)?$/i)) {
-            $dest = $opt{'tftp'} . ":/" . $opt{'dest'}
+        my $src  = $opt{source};
+        my $dest = $opt{dest};
+        if (($opt{dest} !~ /^run(?:ning)?(?:-config)?$/i) &&
+            ($opt{dest} !~ /^start(?:up)?(?:-config)?$/i)) {
+            $dest = $opt{tftp} . ":/" . $opt{dest}
         } else {
-            $src = $opt{'tftp'} . ":/" . $opt{'source'}
+            $src = $opt{tftp} . ":/" . $opt{source}
         }
         printf "$_: copy $src $dest";
-        if ($opt{'write'}) {
+        if ($opt{write}) {
             if (defined($conf = $cm->config_copy())) {
                 print "$_:  copy run start\n"
             } else {

@@ -21,3 +21,10 @@ Revision history for Perl extension Cisco::Management.
         and cisco-sysi.pl into cisco-info.pl.
       - Added interface_metrics method.
       - Added interface_utilization method.
+
+0.03  Thu May  4 14:10:40 2010
+      - Fixed bug in line_sessions(); too many for iterations.
+      - Fixed bug in interface_info(); if duplex not defined.
+      - Added option for /xx instead of dotted-octet format for 
+        IP Mask in interface_ip().
+      - Updated error message details.

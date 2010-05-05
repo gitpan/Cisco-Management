@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               Cisco-Management
-version:            0.02
+version:            0.03
 abstract:           Interface for Cisco Management
 author:
     - Michael Vincent <vin at vinsworld dot com>

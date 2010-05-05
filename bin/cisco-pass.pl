@@ -10,7 +10,7 @@ my %opt;
 my ($opt_help, $opt_man);
 
 GetOptions(
-  'encrypt:s' => \$opt{'encrypt'},
+  'encrypt:s' => \$opt{encrypt},
   'help!'     => \$opt_help,
   'man!'      => \$opt_man
 ) or pod2usage(-verbose => 0);
@@ -23,8 +23,8 @@ if (!@ARGV) {
     pod2usage(-verbose => 0, -message => "$0: argument required\n")
 }
 
-if (defined($opt{'encrypt'})) {
-    if (my $passwd = Cisco::Management->password_encrypt($ARGV[0], $opt{'encrypt'})) {
+if (defined($opt{encrypt})) {
+    if (my $passwd = Cisco::Management->password_encrypt($ARGV[0], $opt{encrypt})) {
         print "$_\n" for (@{$passwd})
     } else {
         printf "Error - %s\n", Cisco::Management->error

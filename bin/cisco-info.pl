@@ -9,12 +9,12 @@ my %opt;
 my ($opt_help, $opt_man);
 
 GetOptions(
-  'community=s'  => \$opt{'community'},
-  'CPU!'         => \$opt{'cpu'},
-  'Kilobytes!'   => \$opt{'k'},
-  'memory!'      => \$opt{'mem'},
-  'Megabytes!'   => \$opt{'m'},
-  'system!'      => \$opt{'sys'},
+  'community=s'  => \$opt{community},
+  'CPU!'         => \$opt{cpu},
+  'Kilobytes!'   => \$opt{k},
+  'memory!'      => \$opt{mem},
+  'Megabytes!'   => \$opt{m},
+  'system!'      => \$opt{sys},
   'help!'        => \$opt_help,
   'man!'         => \$opt_man
 ) or pod2usage(-verbose => 0);
@@ -27,11 +27,11 @@ if (!@ARGV) {
     pod2usage(-verbose => 0, -message => "$0: host required\n")
 }
 
-$opt{'community'} = $opt{'community'} || 'private';
-if (!defined($opt{'cpu'}) && 
-    !(defined($opt{'mem'}) || defined($opt{'k'}) || defined($opt{'m'})) && 
-    !defined($opt{'sys'})) {
-    $opt{'sys'} = 1
+$opt{community} = $opt{community} || 'private';
+if (!defined($opt{cpu}) && 
+    !(defined($opt{mem}) || defined($opt{k}) || defined($opt{m})) && 
+    !defined($opt{sys})) {
+    $opt{sys} = 1
 }
 
 for (@ARGV) {
@@ -40,19 +40,19 @@ for (@ARGV) {
     my $cm;
     if (!defined($cm = Cisco::Management->new(
                               hostname  => $_,
-                              community => $opt{'community'}
+                              community => $opt{community}
                              ))) {
         printf "Error: %s\n", Cisco::Management->error;
         next
     }
 
-    if (defined($opt{'cpu'})) {
+    if (defined($opt{cpu})) {
         if (defined(my $cpu = $cm->cpu_info())) {        
             print "CPU Name            | 5 second(%) | 1 minute(%) | 5 minute(%)\n";
             print "--------------------|-------------|-------------|------------\n";
             for (0..$#{$cpu}) {
                 printf "%-20s|%9.2f    |%9.2f    |%9.2f\n", 
-                    $cpu->[$_]->{'Name'}, 
+                    $cpu->[$_]->{Name}, 
                     $cpu->[$_]->{'5sec'},
                     $cpu->[$_]->{'1min'},
                     $cpu->[$_]->{'5min'}
@@ -63,28 +63,28 @@ for (@ARGV) {
         }
     }
 
-    if (defined($opt{'mem'}) || defined($opt{'m'}) || defined($opt{'k'})) {
-        if (defined(my $mem = $cm->memory_info())) {        
+    if (defined($opt{mem}) || defined($opt{m}) || defined($opt{k})) {
+        if (defined(my $mem = $cm->memory_info())) {
             my $params = 'B';
-            if (defined($opt{'k'})) { $params = 'K' }
-            if (defined($opt{'m'})) { $params = 'M' }
+            if (defined($opt{k})) { $params = 'K' }
+            if (defined($opt{m})) { $params = 'M' }
 
             printf "Memory Pool Name    |   Total(%s)    |    Used(%s)    |Percent(%%)\n", $params, $params;
             print  "--------------------|---------------|---------------|----------\n";
             for (0..$#{$mem}) {
                 my ($Used, $Total);
-                if       ($params eq 'K') { $Used  = $mem->[$_]->{'Used'}/1000;
-                                            $Total = $mem->[$_]->{'Total'}/1000
-                } elsif  ($params eq 'M') { $Used  = $mem->[$_]->{'Used'}/1000000;
-                                            $Total = $mem->[$_]->{'Total'}/1000000
-                } else                    { $Used  = $mem->[$_]->{'Used'};
-                                            $Total = $mem->[$_]->{'Total'}
+                if       ($params eq 'K') { $Used  = $mem->[$_]->{Used}/1000;
+                                            $Total = $mem->[$_]->{Total}/1000
+                } elsif  ($params eq 'M') { $Used  = $mem->[$_]->{Used}/1000000;
+                                            $Total = $mem->[$_]->{Total}/1000000
+                } else                    { $Used  = $mem->[$_]->{Used};
+                                            $Total = $mem->[$_]->{Total}
                 }
                 printf "%-20s|%15.2f|%15.2f|%7.2f\n", 
-                    $mem->[$_]->{'Name'}, 
+                    $mem->[$_]->{Name}, 
                     $Total,
                     $Used, 
-                    $mem->[$_]->{'Used'}/$mem->[$_]->{'Total'}*100
+                    $mem->[$_]->{Used}/$mem->[$_]->{Total}*100
             }
             print "\n"
         } else {
@@ -92,8 +92,8 @@ for (@ARGV) {
         }
     }
 
-    if (defined($opt{'sys'})) {
-        if (defined(my $sysinfo = $cm->system_info())) {        
+    if (defined($opt{sys})) {
+        if (defined(my $sysinfo = $cm->system_info())) {
             printf "Description = %s\n", $sysinfo->system_info_description;
             printf "ObjectID    = %s\n", $sysinfo->system_info_objectID;
             printf "Uptime      = %s\n", $sysinfo->system_info_uptime;
