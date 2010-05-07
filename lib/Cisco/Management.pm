@@ -16,7 +16,7 @@ use Sys::Hostname;
 use IO::Socket;
 use Net::SNMP qw(:asn1 :snmp DEBUG_ALL);
 
-our $VERSION      = '0.03';
+our $VERSION      = '0.04';
 our @ISA          = qw(Exporter);
 our @EXPORT       = qw();
 our %EXPORT_TAGS  = (
