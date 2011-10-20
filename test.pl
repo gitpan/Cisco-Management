@@ -3,9 +3,9 @@
 # `make test'. After `make install' it should work as `perl test.pl'
 
 use strict;
-use Test::Simple tests => 34;
+use Test::Simple tests => 35;
 
-my $NUM_TESTS = 34;
+my $NUM_TESTS = 35;
 
 use Cisco::Management;
 ok(1, "Loading Module"); # If we made it this far, we're ok.
@@ -311,7 +311,18 @@ my $error;
         ok($sysinfo->system_info_osversion   =~ /\d+/, "System Info (version)");
     } else {
         $error = $cm->error;
-        ok(0, "System Info () [$error]")
+        ok(0, "System Info () [$error]");
+        for (1..8) {
+            ok(0, "System Info ()")
+        }
+    }
+
+    # Get system inventory
+    if (defined(my $inventory = $cm->system_inventory())) {
+        ok($inventory->[0]->{Name} ne '', "System Inventory");
+    } else {
+        $error = $cm->error;
+        ok(0, "System Inventory () [$error]")
     }
 
 # END

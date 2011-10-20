@@ -2,6 +2,7 @@
 
 use strict;
 use Cisco::Management;
+use blib;
 use Getopt::Long qw(:config no_ignore_case); #bundling
 use Pod::Usage;
 
@@ -83,7 +84,7 @@ for (@ARGV) {
         } else {
             $src = $opt{tftp} . ":/" . $opt{source}
         }
-        printf "$_: copy $src $dest";
+        printf "$_: copy $src $dest\n";
         if ($opt{write}) {
             if (defined($conf = $cm->config_copy())) {
                 print "$_:  copy run start\n"
@@ -133,7 +134,7 @@ C<copy run start> on host are options.
 
  -s <file>        File name for source.  Can be 'start' or 'run' 
  --source         for local device files.  Can be any filename for 
-                  TFTP destination.
+                  TFTP source.
                   DEFAULT:  (or not specified) 'run'.
 
  -t <IP>          TFTP server address or hostname.

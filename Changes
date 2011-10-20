@@ -25,11 +25,24 @@ Revision history for Perl extension Cisco::Management.
 0.03  Thu May  4 14:10:40 2010
       - Fixed bug in line_sessions(); too many for iterations.
       - Fixed bug in interface_info(); if duplex not defined.
-      - Added option for /xx instead of dotted-octet format for 
+      - Added option for /xx instead of dotted-octet format for
         IP Mask in interface_ip().
       - Updated error message details.
 
 0.04  Thu May  7 14:10:40 2010
-      - Extra files from Apple 'make dist' causes issues on all 
-        other OS's.  Damn perl.org world-writeable issue with 
+      - Extra files from Apple 'make dist' causes issues on all
+        other OS's.  Damn perl.org world-writeable issue with
         Windows.
+
+0.05  Wed Oct 12 23:30:40 2011
+      - Changed/updated @_KEY variables.
+      - Added system_inventory() method.
+      - Fixed minor glitch in system_info() method.
+      - Fixed typos/mistakes in POD.
+      - Fixed and added inventory option to bin/cisco-info.pl
+        script.
+      - User Toby provided -version option to new() method 
+        for SNMP version.
+      - Added pass through of options for Net::SNMP.
+      - Updated code for config_copy to reuse.
+      - User Toby added finish check for CatOS.

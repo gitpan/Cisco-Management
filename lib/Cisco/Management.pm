@@ -16,12 +16,12 @@ use Sys::Hostname;
 use IO::Socket;
 use Net::SNMP qw(:asn1 :snmp DEBUG_ALL);
 
-our $VERSION      = '0.04';
+our $VERSION      = '0.05';
 our @ISA          = qw(Exporter);
 our @EXPORT       = qw();
 our %EXPORT_TAGS  = (
                      'password' => [qw(password_decrypt password_encrypt)],
-                     'hashkeys' => [qw(@IPKEYS @IFKEYS @LINEKEYS @SESSIONKEYS @IFMETRICKEYS @IFMETRICRETKEYS)]
+                     'hashkeys' => [qw(@IPKEYS @IFKEYS @LINEKEYS @SESSIONKEYS @IFMETRICUSERKEYS @IFMETRICKEYS @CPUKEYS @MEMKEYS @INVENTORYKEYS)]
                     );
 our @EXPORT_OK    = map {@{$EXPORT_TAGS{$_}}} keys(%EXPORT_TAGS);
 $EXPORT_TAGS{ALL} = [ @EXPORT_OK ];
@@ -44,8 +44,13 @@ our @IPKEYS      = qw(IPAddress IPMask);
 our @LINEKEYS    = qw(Active Type Autobaud SpeedIn SpeedOut Flow Modem Location Term ScrLen ScrWid Esc Tmo Sestmo Rotary Uses Nses User Noise Number TimeActive);
 our @SESSIONKEYS = qw(Type Direction Address Name Current Idle Line);
 
-our @IFMETRICKEYS    = qw(Multicasts Broadcasts Octets Unicasts Discards Errors Unknowns);
-our @IFMETRICRETKEYS = qw(InMulticasts OutMulticasts InBroadcasts OutBroadcasts InOctets OutOctets InUnicasts OutUnicasts InDiscards OutDiscards InErrors OutErrors InUnknowns);
+our @IFMETRICUSERKEYS = qw(Multicasts Broadcasts Octets Unicasts Discards Errors Unknowns);
+our @IFMETRICKEYS     = qw(InMulticasts OutMulticasts InBroadcasts OutBroadcasts InOctets OutOctets InUnicasts OutUnicasts InDiscards OutDiscards InErrors OutErrors InUnknowns);
+
+our @CPUKEYS = qw(Name 5sec 1min 5min);
+our @MEMKEYS = qw(Name Alternate Valid Used Free LargestFree Total);
+
+our @INVENTORYKEYS = qw(Descr VendorType ContainedIn Class ParentRelPos Name HardwareRev FirmwareRev SoftwareRev SerialNum MfgName ModelName Alias AssetID IsFRU);
 
 our $LASTERROR;
 ########################################################
@@ -61,7 +66,7 @@ sub new {
     my $class = ref($self) || $self;
 
     my %params = (
-        community => 'private',
+        version   => 1,
         port      => 161,
         timeout   => 10
     );
@@ -80,8 +85,18 @@ sub new {
                 $params{'hostname'} = $args{$_}
             } elsif (/^-?timeout$/i) {
                 $params{'timeout'} = $args{$_}
+            } elsif (/^-?version$/i) {
+                $params{'version'} = $args{$_}
+            # pass through
+            } else {
+                $params{$_} = $args{$_}
             }
         }
+    }
+
+    # set default community string if not provided and SNMP version 1 or 2
+    if (($params{'version'} <= 2) && !defined($params{'community'})) {
+        $params{'community'} = 'private'
     }
 
     my ($session, $error) = Net::SNMP->session(%params);
@@ -118,6 +133,7 @@ sub config_copy {
     my %params = (
         op         => 'wr',
         catos      => 0,
+        timeout    => 10,
         source     => 4,
         dest       => 3,
         tftpserver => inet_ntoa((gethostbyname(hostname))[4])
@@ -136,6 +152,8 @@ sub config_copy {
                 if ($args{$_} == 1) {
                     $params{'catos'} = 1
                 }
+            } elsif (/^-?timeout$/i) {
+                $params{'timeout'} = $args{$_}
             } elsif (/^-?source$/i) {
                 if ($args{$_} =~ /^run(?:ning)?(?:-config)?$/i) {
                     $params{'source'} = 4
@@ -168,7 +186,7 @@ sub config_copy {
 
     my $response;
     my $instance = int(rand(1024)+1024);
-    my %err = (
+    my %ioserr = (
         1 => "Unknown",
         2 => "Bad file name",
         3 => "Timeout",
@@ -205,114 +223,16 @@ sub config_copy {
           # ccCopyDestFileType (1 = networkFile, 3 = startupConfig, 4 = runningConfig)
         $response = $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.4.' . $instance, INTEGER, $params{'dest'})
 
-    # TFTP PUT (to device)
-    } elsif ($params{'op'} eq 'put') {
-        # CatOS
-        if ($params{'catos'}) {
-            $response = $session->set_request('1.3.6.1.4.1.9.5.1.5.1.0', OCTET_STRING, $params{'tftpserver'});
-            $response = $session->set_request('1.3.6.1.4.1.9.5.1.5.2.0', OCTET_STRING, $params{'file'});
-            $response = $session->set_request('1.3.6.1.4.1.9.5.1.5.3.0', INTEGER, 1);
-            $response = $session->set_request('1.3.6.1.4.1.9.5.1.5.4.0', INTEGER, 2);
-            if (defined($response)) {
-                return bless $cc, $class
-            } else {
-                $LASTERROR = "[CatOS TFTP put] FAILED";
-                return(undef)
-            }
-
-        # IOS
-        } else {
-            # ccCopyEntryRowStatus (5 = createAndWait, 6 = destroy)
-            $response = $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.14.' . $instance, INTEGER, 6);
-            $response = $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.14.' . $instance, INTEGER, 5);
-
-              # ccCopyProtocol (1 = TFTP)
-            $response = $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.2.' . $instance, INTEGER, 1);
-
-            if (!defined($response)) {
-                $LASTERROR = "[IOS TFTP put] NOT SUPPORTED - Trying old way";
-                $response = $session->set_request('1.3.6.1.4.1.9.2.1.50.' . $params{'tftpserver'}, OCTET_STRING, $params{'file'});
-                if (defined($response)) {
-                    return bless $cc, $class
-                } else {
-                    $LASTERROR = "[IOS TFTP put] FAILED (new/old)";
-                    return(undef)
-                }
-            }
-              # ccCopySourceFileType (1 = networkFile, 3 = startupConfig, 4 = runningConfig)
-            $response = $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.3.' . $instance, INTEGER, 1);
-              # ccCopyDestFileType (1 = networkFile, 3 = startupConfig, 4 = runningConfig)
-            $response = $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.4.' . $instance, INTEGER, $params{'dest'});
-              # New way
-              # ccCopyServerAddressType (1 = IPv4, 2 = IPv6)
-            $response = $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.15.' . $instance, INTEGER, 1);
-
-            if (defined($response)) {
-                  # ccCopyServerAddressRev1
-                $response = $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.16.' . $instance, OCTET_STRING, $params{'tftpserver'})
-            } else {
-                  # Deprecated
-                  # ccCopyServerAddress
-                $response = $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.5.' . $instance, IPADDRESS, $params{'tftpserver'})
-            }
-              # ccCopyFileName
-            $response = $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.6.' . $instance, OCTET_STRING, $params{'file'})
-        }
-
-    # TFTP GET (from device)
-    } elsif ($params{'op'} eq 'get') {
-        # CatOS
-        if ($params{'catos'}) {
-            $response = $session->set_request('1.3.6.1.4.1.9.5.1.5.1.0', OCTET_STRING, $params{'tftpserver'});
-            $response = $session->set_request('1.3.6.1.4.1.9.5.1.5.2.0', OCTET_STRING, $params{'file'});
-            $response = $session->set_request('1.3.6.1.4.1.9.5.1.5.3.0', INTEGER, 1);
-            $response = $session->set_request('1.3.6.1.4.1.9.5.1.5.4.0', INTEGER, 3);
-            if (defined($response)) {
-                return bless $cc, $class
-            } else {
-                $LASTERROR = "[CatOS TFTP get] FAILED";
-                return(undef)
-            }
-
-        # IOS
-        } else {
-            # ccCopyEntryRowStatus (5 = createAndWait, 6 = destroy)
-            $response = $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.14.' . $instance, INTEGER, 6);
-            $response = $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.14.' . $instance, INTEGER, 5);
-
-              # ccCopyProtocol (1 = TFTP)
-            $response = $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.2.' . $instance, INTEGER, 1);
-
-            if (!defined($response)) {
-                $LASTERROR = "[IOS TFTP get] NOT SUPPORTED - Trying old way";
-                $response = $session->set_request('1.3.6.1.4.1.9.2.1.55.' . $params{'tftpserver'}, OCTET_STRING, $params{'file'});
-                if (defined($response)) {
-                    return bless $cc, $class
-                } else {
-                    $LASTERROR = "[IOS TFTP get] FAILED (new/old)";
-                    return(undef)
-                }
-            }
-              # ccCopySourceFileType (1 = networkFile, 3 = startupConfig, 4 = runningConfig)
-            $response = $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.3.' . $instance, INTEGER, $params{'source'});
-              # ccCopyDestFileType (1 = networkFile, 3 = startupConfig, 4 = runningConfig)
-            $response = $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.4.' . $instance, INTEGER, 1);
-              # New way
-              # ccCopyServerAddressType (1 = IPv4, 2 = IPv6)
-            $response = $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.15.' . $instance, INTEGER, 1);
-
-            if (defined($response)) {
-                  # ccCopyServerAddressRev1
-                $response = $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.16.' . $instance, OCTET_STRING, $params{'tftpserver'})
-            } else {
-                  # Deprecated
-                  # ccCopyServerAddress
-                $response = $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.5.' . $instance, IPADDRESS, $params{'tftpserver'})
-            }
-              # ccCopyFileName
-            $response = $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.6.' . $instance, OCTET_STRING, $params{'file'})
+    # TFTP PUT/GET (to/from device)
+    } else {
+        $response = _config_copy(\%params, $session, $instance);
+        if ($response == 0) {
+            return bless $cc, $class
+        } elsif ($response == -1) {
+            return(undef)
         }
     }
+
     # ccCopyEntryRowStatus (4 = createAndGo, 6 = destroy)
     $response = $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.14.' . $instance, INTEGER, 1);
 
@@ -322,9 +242,22 @@ sub config_copy {
         $LASTERROR = "NOT SUPPORTED (after setup)";
         return(undef)
     }
+
+    # loop and check response - error if timeout
+    my $loop = 0;
     while ($response->{'1.3.6.1.4.1.9.9.96.1.1.1.1.10.' . $instance} <= 2) {
-        $response = $session->get_request('1.3.6.1.4.1.9.9.96.1.1.1.1.10.' . $instance)
+        $response = $session->get_request('1.3.6.1.4.1.9.9.96.1.1.1.1.10.' . $instance);
+        if (!defined($response)) {
+            $LASTERROR = "[IOS TFTP $params{'op'}] FAILED: Cannot verify completion";
+            return(undef)
+        }
+        if ($loop++ == $params{'timeout'}) {
+            $LASTERROR = "[IOS TFTP $params{'op'}] FAILED: Timeout during completion verification";
+            return(undef)
+        }
+        sleep 1
     }
+
     # Success
     if ($response->{'1.3.6.1.4.1.9.9.96.1.1.1.1.10.' . $instance} == 3) {
         $response = $session->get_request('1.3.6.1.4.1.9.9.96.1.1.1.1.11.' . $instance);
@@ -337,9 +270,9 @@ sub config_copy {
     } elsif ($response->{'1.3.6.1.4.1.9.9.96.1.1.1.1.10.' . $instance} == 4) {
         $response = $session->get_request('1.3.6.1.4.1.9.9.96.1.1.1.1.13.' . $instance);
         $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.14.' . $instance, INTEGER, 6);
-        $LASTERROR = $err{$response->{'1.3.6.1.4.1.9.9.96.1.1.1.1.13.' . $instance}};
+        $LASTERROR = "[IOS TFTP $params{'op'}] FAILED: " . $ioserr{$response->{'1.3.6.1.4.1.9.9.96.1.1.1.1.13.' . $instance}};
         return(undef)
-    } else { 
+    } else {
         $LASTERROR = "Cannot determine success or failure";
         return(undef)
     }
@@ -583,7 +516,7 @@ sub interface_info {
         for my $oid (1..$#IFKEYS) {
             $ret{$IFKEYS[$oid-1]} = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.' . $oid . $interface);
             if (!defined($ret{$IFKEYS[$oid-1]})) {
-                $LASTERROR = "Cannot get interface info: 1.3.6.1.2.1.2.2.1.$oid$interface";
+                $LASTERROR = "Cannot get interface info: $IFKEYS[$oid-1] interface: $interface";
                 return(undef)
             }
         }
@@ -638,8 +571,9 @@ sub interface_ip {
         $LASTERROR = "Cannot get interface IP info";
         return(undef)
     }
-    my $IPAddress = &_snmpgetnext($session, '1.3.6.1.2.1.4.20.1.1');
-    my $IPMask    = &_snmpgetnext($session, '1.3.6.1.2.1.4.20.1.3');
+    my %ret;
+    $ret{$IPKEYS[0]} = &_snmpgetnext($session, '1.3.6.1.2.1.4.20.1.1');
+    $ret{$IPKEYS[1]} = &_snmpgetnext($session, '1.3.6.1.2.1.4.20.1.3');
 
     my %mask = (
         "0.0.0.0"         => 0,  "128.0.0.0"       => 1,  "192.0.0.0"       => 2,
@@ -658,11 +592,11 @@ sub interface_ip {
     my %IPInfo;
     for (0..$#{$IPIndex}) {
         my %IPInfoHash;
-        $IPInfoHash{$IPKEYS[0]} = $IPAddress->[$_];
+        $IPInfoHash{$IPKEYS[0]} = $ret{$IPKEYS[0]}->[$_];
         if (defined($arg) && ($arg >= 1)) {
-            $IPInfoHash{$IPKEYS[1]} = $mask{$IPMask->[$_]}
+            $IPInfoHash{$IPKEYS[1]} = $mask{$ret{$IPKEYS[1]}->[$_]}
         } else {
-            $IPInfoHash{$IPKEYS[1]} = $IPMask->[$_]
+            $IPInfoHash{$IPKEYS[1]} = $ret{$IPKEYS[1]}->[$_]
         }
         push @{$IPInfo{$IPIndex->[$_]}}, \%IPInfoHash
     }
@@ -678,7 +612,8 @@ sub interface_metrics {
     my %params = (
         'ifs' => [-1],
     );
-    for (@IFMETRICKEYS) {
+    # assume all metrics
+    for (@IFMETRICUSERKEYS) {
         $params{$_} = 1
     }
 
@@ -696,7 +631,8 @@ sub interface_metrics {
                     return(undef)
                 }
             } elsif (/^-?metric(?:s)?$/i) {
-                for (@IFMETRICKEYS) {
+                # metrics provided - only use provided
+                for (@IFMETRICUSERKEYS) {
                     $params{$_} = 0
                 }
                 if (ref($args{$_}) eq 'ARRAY') {
@@ -738,101 +674,121 @@ sub interface_metrics {
             $LASTERROR = "Cannot get ifIndex: $interface";
             return(undef)
         }
-        if ($params{'Multicasts'}) {
-            $ret{'InMulticasts'}  = &_snmpgetnext($session, '1.3.6.1.2.1.31.1.1.1.2' . $interface);
-            if (!defined($ret{'InMulticasts'})) {
-                $LASTERROR = "Cannot get InMulticasts interface: $interface";
+        # multicasts
+        if ($params{$IFMETRICUSERKEYS[0]}) {
+            # In
+            $ret{$IFMETRICKEYS[0]} = &_snmpgetnext($session, '1.3.6.1.2.1.31.1.1.1.2' . $interface);
+            if (!defined($ret{$IFMETRICKEYS[0]})) {
+                $LASTERROR = "Cannot get $IFMETRICKEYS[0] interface: $interface";
                 return(undef)
             }
-            $ret{'OutMulticasts'} = &_snmpgetnext($session, '1.3.6.1.2.1.31.1.1.1.4' . $interface);
-            if (!defined($ret{'OutMulticasts'})) {
-                $LASTERROR = "Cannot get OutMulticasts interface: $interface";
-                return(undef)
-            }
-        }
-        if ($params{'Broadcasts'}) {
-            $ret{'InBroadcasts'}  = &_snmpgetnext($session, '1.3.6.1.2.1.31.1.1.1.3' . $interface);
-            if (!defined($ret{'InBroadcasts'})) {
-                $LASTERROR = "Cannot get InBroadcasts interface: $interface";
-                return(undef)
-            }
-            $ret{'OutBroadcasts'} = &_snmpgetnext($session, '1.3.6.1.2.1.31.1.1.1.5' . $interface);
-            if (!defined($ret{'OutBroadcasts'})) {
-                $LASTERROR = "Cannot get OutBroadcasts interface: $interface";
+            # Out
+            $ret{$IFMETRICKEYS[1]} = &_snmpgetnext($session, '1.3.6.1.2.1.31.1.1.1.4' . $interface);
+            if (!defined($ret{$IFMETRICKEYS[1]})) {
+                $LASTERROR = "Cannot get $IFMETRICKEYS[1] interface: $interface";
                 return(undef)
             }
         }
-        if ($params{'Octets'}) {
-            $ret{'InOctets'}  = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.10' . $interface);
-            if (!defined($ret{'InOctets'})) {
-                $LASTERROR = "Cannot get InOctets interface: $interface";
+        # broadcasts
+        if ($params{$IFMETRICUSERKEYS[1]}) {
+            # In
+            $ret{$IFMETRICKEYS[2]} = &_snmpgetnext($session, '1.3.6.1.2.1.31.1.1.1.3' . $interface);
+            if (!defined($ret{$IFMETRICKEYS[2]})) {
+                $LASTERROR = "Cannot get $IFMETRICKEYS[2] interface: $interface";
                 return(undef)
             }
-            $ret{'OutOctets'} = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.16' . $interface);
-            if (!defined($ret{'OutOctets'})) {
-                $LASTERROR = "Cannot get OutOctets interface: $interface";
-                return(undef)
-            }
-        }
-        if ($params{'Unicasts'}) {
-            $ret{'InUnicasts'}  = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.11' . $interface);
-            if (!defined($ret{'InUnicasts'})) {
-                $LASTERROR = "Cannot get InUnicasts interface: $interface";
-                return(undef)
-            }
-            $ret{'OutUnicasts'} = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.17' . $interface);
-            if (!defined($ret{'OutUnicasts'})) {
-                $LASTERROR = "Cannot get OutUnicasts interface: $interface";
+            # Out
+            $ret{$IFMETRICKEYS[3]} = &_snmpgetnext($session, '1.3.6.1.2.1.31.1.1.1.5' . $interface);
+            if (!defined($ret{$IFMETRICKEYS[3]})) {
+                $LASTERROR = "Cannot get $IFMETRICKEYS[3] interface: $interface";
                 return(undef)
             }
         }
-        if ($params{'Discards'}) {
-            $ret{'InDiscards'}  = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.13' . $interface);
-            if (!defined($ret{'InDiscards'})) {
-                $LASTERROR = "Cannot get InDiscards interface: $interface";
+        # octets
+        if ($params{$IFMETRICUSERKEYS[2]}) {
+            # In
+            $ret{$IFMETRICKEYS[4]} = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.10' . $interface);
+            if (!defined($ret{$IFMETRICKEYS[4]})) {
+                $LASTERROR = "Cannot get $IFMETRICKEYS[4] interface: $interface";
                 return(undef)
             }
-            $ret{'OutDiscards'} = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.19' . $interface);
-            if (!defined($ret{'OutDiscards'})) {
-                $LASTERROR = "Cannot get OutDiscards interface: $interface";
-                return(undef)
-            }
-        }
-        if ($params{'Errors'}) {
-            $ret{'InErrors'}  = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.14' . $interface);
-            if (!defined($ret{'InErrors'})) {
-                $LASTERROR = "Cannot get InErrors interface: $interface";
-                return(undef)
-            }
-            $ret{'OutErrors'} = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.20' . $interface);
-            if (!defined($ret{'OutErrors'})) {
-                $LASTERROR = "Cannot get OutErrors interface: $interface";
+            # Out
+            $ret{$IFMETRICKEYS[5]} = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.16' . $interface);
+            if (!defined($ret{$IFMETRICKEYS[5]})) {
+                $LASTERROR = "Cannot get $IFMETRICKEYS[5] interface: $interface";
                 return(undef)
             }
         }
-        if ($params{'Unknowns'}) {
-            $ret{'InUnknowns'}  = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.15' . $interface);
-            if (!defined($ret{'InUnknowns'})) {
-                $LASTERROR = "Cannot get InUnknowns interface: $interface";
+        # unicasts
+        if ($params{$IFMETRICUSERKEYS[3]}) {
+            # In
+            $ret{$IFMETRICKEYS[6]} = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.11' . $interface);
+            if (!defined($ret{$IFMETRICKEYS[6]})) {
+                $LASTERROR = "Cannot get $IFMETRICKEYS[6] interface: $interface";
+                return(undef)
+            }
+            # Out
+            $ret{$IFMETRICKEYS[7]} = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.17' . $interface);
+            if (!defined($ret{$IFMETRICKEYS[7]})) {
+                $LASTERROR = "Cannot get $IFMETRICKEYS[7] interface: $interface";
+                return(undef)
+            }
+        }
+        # discards
+        if ($params{$IFMETRICUSERKEYS[4]}) {
+            # In
+            $ret{$IFMETRICKEYS[8]} = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.13' . $interface);
+            if (!defined($ret{$IFMETRICKEYS[8]})) {
+                $LASTERROR = "Cannot get $IFMETRICKEYS[8] interface: $interface";
+                return(undef)
+            }
+            # Out
+            $ret{$IFMETRICKEYS[9]} = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.19' . $interface);
+            if (!defined($ret{$IFMETRICKEYS[9]})) {
+                $LASTERROR = "Cannot get $IFMETRICKEYS[9] interface: $interface";
+                return(undef)
+            }
+        }
+        # errors
+        if ($params{$IFMETRICUSERKEYS[5]}) {
+            # In
+            $ret{$IFMETRICKEYS[10]} = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.14' . $interface);
+            if (!defined($ret{$IFMETRICKEYS[10]})) {
+                $LASTERROR = "Cannot get $IFMETRICKEYS[10] interface: $interface";
+                return(undef)
+            }
+            # Out
+            $ret{$IFMETRICKEYS[11]} = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.20' . $interface);
+            if (!defined($ret{$IFMETRICKEYS[11]})) {
+                $LASTERROR = "Cannot get $IFMETRICKEYS[11] interface: $interface";
+                return(undef)
+            }
+        }
+        # unknowns
+        if ($params{$IFMETRICUSERKEYS[6]}) {
+            # In
+            $ret{$IFMETRICKEYS[12]}  = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.15' . $interface);
+            if (!defined($ret{$IFMETRICKEYS[12]})) {
+                $LASTERROR = "Cannot get $IFMETRICKEYS[12] interface: $interface";
                 return(undef)
             }
         }
 
         for my $idx (0..$#{$ret{'Index'}}) {
             my %IfMetricHash;
-            $IfMetricHash{'InMulticasts'}  = $ret{'InMulticasts'}->[$idx];
-            $IfMetricHash{'OutMulticasts'} = $ret{'OutMulticasts'}->[$idx];
-            $IfMetricHash{'InBroadcasts'}  = $ret{'InBroadcasts'}->[$idx];
-            $IfMetricHash{'OutBroadcasts'} = $ret{'OutBroadcasts'}->[$idx];
-            $IfMetricHash{'InOctets'}      = $ret{'InOctets'}->[$idx];
-            $IfMetricHash{'OutOctets'}     = $ret{'OutOctets'}->[$idx];
-            $IfMetricHash{'InUnicasts'}    = $ret{'InUnicasts'}->[$idx];
-            $IfMetricHash{'OutUnicasts'}   = $ret{'OutUnicasts'}->[$idx];
-            $IfMetricHash{'InDiscards'}    = $ret{'InDiscards'}->[$idx];
-            $IfMetricHash{'OutDiscards'}   = $ret{'OutDiscards'}->[$idx];
-            $IfMetricHash{'InErrors'}      = $ret{'InErrors'}->[$idx];
-            $IfMetricHash{'OutErrors'}     = $ret{'OutErrors'}->[$idx];
-            $IfMetricHash{'InUnknowns'}    = $ret{'InUnknowns'}->[$idx];
+            $IfMetricHash{$IFMETRICKEYS[0]}  = $ret{$IFMETRICKEYS[0]}->[$idx];
+            $IfMetricHash{$IFMETRICKEYS[1]}  = $ret{$IFMETRICKEYS[1]}->[$idx];
+            $IfMetricHash{$IFMETRICKEYS[2]}  = $ret{$IFMETRICKEYS[2]}->[$idx];
+            $IfMetricHash{$IFMETRICKEYS[3]}  = $ret{$IFMETRICKEYS[3]}->[$idx];
+            $IfMetricHash{$IFMETRICKEYS[4]}  = $ret{$IFMETRICKEYS[4]}->[$idx];
+            $IfMetricHash{$IFMETRICKEYS[5]}  = $ret{$IFMETRICKEYS[5]}->[$idx];
+            $IfMetricHash{$IFMETRICKEYS[6]}  = $ret{$IFMETRICKEYS[6]}->[$idx];
+            $IfMetricHash{$IFMETRICKEYS[7]}  = $ret{$IFMETRICKEYS[7]}->[$idx];
+            $IfMetricHash{$IFMETRICKEYS[8]}  = $ret{$IFMETRICKEYS[8]}->[$idx];
+            $IfMetricHash{$IFMETRICKEYS[9]}  = $ret{$IFMETRICKEYS[9]}->[$idx];
+            $IfMetricHash{$IFMETRICKEYS[10]} = $ret{$IFMETRICKEYS[10]}->[$idx];
+            $IfMetricHash{$IFMETRICKEYS[11]} = $ret{$IFMETRICKEYS[11]}->[$idx];
+            $IfMetricHash{$IFMETRICKEYS[12]} = $ret{$IFMETRICKEYS[12]}->[$idx];
             $IfMetric{$ret{'Index'}->[$idx]} = bless \%IfMetricHash
         }
     }
@@ -885,19 +841,19 @@ sub interface_utilization {
     my %IfUtil;
     for my $ifs (sort {$a <=> $b} (keys(%{$prev}))) {
         my %IfUtilHash;
-        $IfUtilHash{'InMulticasts'}  = defined($curr->{$ifs}->{'InMulticasts'}) ? ($curr->{$ifs}->{'InMulticasts'} - $prev->{$ifs}->{'InMulticasts'}) / $params{'polling'} : undef;
-        $IfUtilHash{'OutMulticasts'} = defined($curr->{$ifs}->{'OutMulticasts'}) ? ($curr->{$ifs}->{'OutMulticasts'} - $prev->{$ifs}->{'OutMulticasts'}) / $params{'polling'} : undef;
-        $IfUtilHash{'InBroadcasts'}  = defined($curr->{$ifs}->{'InBroadcasts'}) ? ($curr->{$ifs}->{'InBroadcasts'} - $prev->{$ifs}->{'InBroadcasts'}) / $params{'polling'} : undef;
-        $IfUtilHash{'OutBroadcasts'} = defined($curr->{$ifs}->{'OutBroadcasts'}) ? ($curr->{$ifs}->{'OutBroadcasts'} - $prev->{$ifs}->{'OutBroadcasts'}) / $params{'polling'} : undef;
-        $IfUtilHash{'InOctets'}      = defined($curr->{$ifs}->{'InOctets'}) ? (($curr->{$ifs}->{'InOctets'} - $prev->{$ifs}->{'InOctets'}) * 8) / $params{'polling'} : undef;
-        $IfUtilHash{'OutOctets'}     = defined($curr->{$ifs}->{'OutOctets'}) ? (($curr->{$ifs}->{'OutOctets'} - $prev->{$ifs}->{'OutOctets'}) * 8) / $params{'polling'} : undef;
-        $IfUtilHash{'InUnicasts'}    = defined($curr->{$ifs}->{'InUnicasts'}) ? ($curr->{$ifs}->{'InUnicasts'} - $prev->{$ifs}->{'InUnicasts'}) / $params{'polling'} : undef;
-        $IfUtilHash{'OutUnicasts'}   = defined($curr->{$ifs}->{'OutUnicasts'}) ? ($curr->{$ifs}->{'OutUnicasts'} - $prev->{$ifs}->{'OutUnicasts'}) / $params{'polling'} : undef;
-        $IfUtilHash{'InDiscards'}    = defined($curr->{$ifs}->{'InDiscards'}) ? ($curr->{$ifs}->{'InDiscards'} - $prev->{$ifs}->{'InDiscards'}) / $params{'polling'} : undef;
-        $IfUtilHash{'OutDiscards'}   = defined($curr->{$ifs}->{'OutDiscards'}) ? ($curr->{$ifs}->{'OutDiscards'} - $prev->{$ifs}->{'OutDiscards'}) / $params{'polling'} : undef;
-        $IfUtilHash{'InErrors'}      = defined($curr->{$ifs}->{'InErrors'}) ? ($curr->{$ifs}->{'InErrors'} - $prev->{$ifs}->{'InErrors'}) / $params{'polling'} : undef;
-        $IfUtilHash{'OutErrors'}     = defined($curr->{$ifs}->{'OutErrors'}) ? ($curr->{$ifs}->{'OutErrors'} - $prev->{$ifs}->{'OutErrors'}) / $params{'polling'} : undef;
-        $IfUtilHash{'InUnknowns'}    = defined($curr->{$ifs}->{'InUnknowns'}) ? ($curr->{$ifs}->{'InUnknowns'} - $prev->{$ifs}->{'InUnknowns'}) / $params{'polling'} : undef;
+        $IfUtilHash{$IFMETRICKEYS[0]}  = defined($curr->{$ifs}->{$IFMETRICKEYS[0]})  ?  ($curr->{$ifs}->{$IFMETRICKEYS[0]}  - $prev->{$ifs}->{$IFMETRICKEYS[0]})      / $params{'polling'} : undef;
+        $IfUtilHash{$IFMETRICKEYS[1]}  = defined($curr->{$ifs}->{$IFMETRICKEYS[1]})  ?  ($curr->{$ifs}->{$IFMETRICKEYS[1]}  - $prev->{$ifs}->{$IFMETRICKEYS[1]})      / $params{'polling'} : undef;
+        $IfUtilHash{$IFMETRICKEYS[2]}  = defined($curr->{$ifs}->{$IFMETRICKEYS[2]})  ?  ($curr->{$ifs}->{$IFMETRICKEYS[2]}  - $prev->{$ifs}->{$IFMETRICKEYS[2]})      / $params{'polling'} : undef;
+        $IfUtilHash{$IFMETRICKEYS[3]}  = defined($curr->{$ifs}->{$IFMETRICKEYS[3]})  ?  ($curr->{$ifs}->{$IFMETRICKEYS[3]}  - $prev->{$ifs}->{$IFMETRICKEYS[3]})      / $params{'polling'} : undef;
+        $IfUtilHash{$IFMETRICKEYS[4]}  = defined($curr->{$ifs}->{$IFMETRICKEYS[4]})  ? (($curr->{$ifs}->{$IFMETRICKEYS[4]}  - $prev->{$ifs}->{$IFMETRICKEYS[4]}) * 8) / $params{'polling'} : undef;
+        $IfUtilHash{$IFMETRICKEYS[5]}  = defined($curr->{$ifs}->{$IFMETRICKEYS[5]})  ? (($curr->{$ifs}->{$IFMETRICKEYS[5]}  - $prev->{$ifs}->{$IFMETRICKEYS[5]}) * 8) / $params{'polling'} : undef;
+        $IfUtilHash{$IFMETRICKEYS[6]}  = defined($curr->{$ifs}->{$IFMETRICKEYS[6]})  ?  ($curr->{$ifs}->{$IFMETRICKEYS[6]}  - $prev->{$ifs}->{$IFMETRICKEYS[6]})      / $params{'polling'} : undef;
+        $IfUtilHash{$IFMETRICKEYS[7]}  = defined($curr->{$ifs}->{$IFMETRICKEYS[7]})  ?  ($curr->{$ifs}->{$IFMETRICKEYS[7]}  - $prev->{$ifs}->{$IFMETRICKEYS[7]})      / $params{'polling'} : undef;
+        $IfUtilHash{$IFMETRICKEYS[8]}  = defined($curr->{$ifs}->{$IFMETRICKEYS[8]})  ?  ($curr->{$ifs}->{$IFMETRICKEYS[8]}  - $prev->{$ifs}->{$IFMETRICKEYS[8]})      / $params{'polling'} : undef;
+        $IfUtilHash{$IFMETRICKEYS[9]}  = defined($curr->{$ifs}->{$IFMETRICKEYS[9]})  ?  ($curr->{$ifs}->{$IFMETRICKEYS[9]}  - $prev->{$ifs}->{$IFMETRICKEYS[9]})      / $params{'polling'} : undef;
+        $IfUtilHash{$IFMETRICKEYS[10]} = defined($curr->{$ifs}->{$IFMETRICKEYS[10]}) ?  ($curr->{$ifs}->{$IFMETRICKEYS[10]} - $prev->{$ifs}->{$IFMETRICKEYS[10]})     / $params{'polling'} : undef;
+        $IfUtilHash{$IFMETRICKEYS[11]} = defined($curr->{$ifs}->{$IFMETRICKEYS[11]}) ?  ($curr->{$ifs}->{$IFMETRICKEYS[11]} - $prev->{$ifs}->{$IFMETRICKEYS[11]})     / $params{'polling'} : undef;
+        $IfUtilHash{$IFMETRICKEYS[12]} = defined($curr->{$ifs}->{$IFMETRICKEYS[12]}) ?  ($curr->{$ifs}->{$IFMETRICKEYS[12]} - $prev->{$ifs}->{$IFMETRICKEYS[12]})     / $params{'polling'} : undef;
         $IfUtil{$ifs} = bless \%IfUtilHash
     }
     $prev = bless \%IfUtil, $class;
@@ -1018,7 +974,7 @@ sub line_info {
     for my $oid (1..$#LINEKEYS + 1) {
         $ret{$LINEKEYS[$oid-1]} = &_snmpgetnext($session, '1.3.6.1.4.1.9.2.9.2.1.' . $oid);
         if (!defined($ret{$LINEKEYS[$oid-1]})) {
-            $LASTERROR = "Cannot get line info: 1.3.6.1.4.1.9.2.9.2.1.$oid";
+            $LASTERROR = "Cannot get line info: $LINEKEYS[$oid-1]";
             return(undef)
         }
     }
@@ -1086,7 +1042,7 @@ sub line_sessions {
     for my $oid (1..$#SESSIONKEYS + 1) {
         $ret{$SESSIONKEYS[$oid-1]} = &_snmpgetnext($session, '1.3.6.1.4.1.9.2.9.3.1.' . $oid);
         if (!defined($ret{$SESSIONKEYS[$oid-1]})) {
-            $LASTERROR = "Cannot get session info: 1.3.6.1.4.1.9.2.9.3.1.$oid";
+            $LASTERROR = "Cannot get session info: $SESSIONKEYS[$oid-1]";
             return(undef)
         }
     }
@@ -1200,27 +1156,26 @@ sub memory_info {
 
     my $session = $self->{'_SESSION_'};
 
-    my $Name        = &_snmpgetnext($session, '1.3.6.1.4.1.9.9.48.1.1.1.2');
-    if (!defined($Name)) {
-        $LASTERROR = "Cannot get memory info";
-        return(undef)
+    my %ret;
+    # only +1 because last key (Total) isn't an OID; rather, calculated from 2 other OIDs
+    for my $oid (2..$#MEMKEYS + 1) {
+        $ret{$MEMKEYS[$oid-2]} = &_snmpgetnext($session, '1.3.6.1.4.1.9.9.48.1.1.1.' . $oid);
+        if (!defined($ret{$MEMKEYS[$oid-2]})) {
+            $LASTERROR = "Cannot get memory info: $MEMKEYS[$oid-2]";
+            return(undef)
+        }
     }
-    my $Alternate   = &_snmpgetnext($session, '1.3.6.1.4.1.9.9.48.1.1.1.3');
-    my $Valid       = &_snmpgetnext($session, '1.3.6.1.4.1.9.9.48.1.1.1.4');
-    my $Used        = &_snmpgetnext($session, '1.3.6.1.4.1.9.9.48.1.1.1.5');
-    my $Free        = &_snmpgetnext($session, '1.3.6.1.4.1.9.9.48.1.1.1.6');
-    my $LargestFree = &_snmpgetnext($session, '1.3.6.1.4.1.9.9.48.1.1.1.7');
 
     my @MemInfo;
-    for my $mem (0..$#{$Name}) {
+    for my $mem (0..$#{$ret{$MEMKEYS[0]}}) {
         my %MemInfoHash;
-        $MemInfoHash{'Name'}        = $Name->[$mem];
-        $MemInfoHash{'Alternate'}   = $Alternate->[$mem];
-        $MemInfoHash{'Valid'}       = ($Valid->[$mem] == 1) ? 'TRUE' : 'FALSE';
-        $MemInfoHash{'Used'}        = $Used->[$mem];
-        $MemInfoHash{'Free'}        = $Free->[$mem];
-        $MemInfoHash{'LargestFree'} = $LargestFree->[$mem];
-        $MemInfoHash{'Total'}       = $Used->[$mem] + $Free->[$mem];
+        $MemInfoHash{$MEMKEYS[0]} =  $ret{$MEMKEYS[0]}->[$mem];
+        $MemInfoHash{$MEMKEYS[1]} =  $ret{$MEMKEYS[1]}->[$mem];
+        $MemInfoHash{$MEMKEYS[2]} = ($ret{$MEMKEYS[2]}->[$mem] == 1) ? 'TRUE' : 'FALSE';
+        $MemInfoHash{$MEMKEYS[3]} =  $ret{$MEMKEYS[3]}->[$mem];
+        $MemInfoHash{$MEMKEYS[4]} =  $ret{$MEMKEYS[4]}->[$mem];
+        $MemInfoHash{$MEMKEYS[5]} =  $ret{$MEMKEYS[5]}->[$mem];
+        $MemInfoHash{$MEMKEYS[6]} =  $ret{$MEMKEYS[3]}->[$mem] + $ret{$MEMKEYS[4]}->[$mem];
         push @MemInfo, \%MemInfoHash
     }
     return \@MemInfo
@@ -1403,12 +1358,12 @@ sub system_info {
     if (defined($response)) {
 
         if (defined($response->[0])) { $sysinfo->{'_SYSINFO_'}{'Description'} = $response->[0] }
-        if (defined($response->[0])) { $sysinfo->{'_SYSINFO_'}{'ObjectID'}    = $response->[1] }
-        if (defined($response->[0])) { $sysinfo->{'_SYSINFO_'}{'Uptime'}      = $response->[2] }
-        if (defined($response->[0])) { $sysinfo->{'_SYSINFO_'}{'Contact'}     = $response->[3] }
-        if (defined($response->[0])) { $sysinfo->{'_SYSINFO_'}{'Name'}        = $response->[4] }
-        if (defined($response->[0])) { $sysinfo->{'_SYSINFO_'}{'Location'}    = $response->[5] }
-        if (defined($response->[0])) { $sysinfo->{'_SYSINFO_'}{'Services'}    = $response->[6] }
+        if (defined($response->[1])) { $sysinfo->{'_SYSINFO_'}{'ObjectID'}    = $response->[1] }
+        if (defined($response->[2])) { $sysinfo->{'_SYSINFO_'}{'Uptime'}      = $response->[2] }
+        if (defined($response->[3])) { $sysinfo->{'_SYSINFO_'}{'Contact'}     = $response->[3] }
+        if (defined($response->[4])) { $sysinfo->{'_SYSINFO_'}{'Name'}        = $response->[4] }
+        if (defined($response->[5])) { $sysinfo->{'_SYSINFO_'}{'Location'}    = $response->[5] }
+        if (defined($response->[6])) { $sysinfo->{'_SYSINFO_'}{'Services'}    = $response->[6] }
 
         return bless $sysinfo, $class
     } else {
@@ -1480,6 +1435,51 @@ sub system_info_osversion {
     }
 }
 
+sub system_inventory {
+    my $self  = shift;
+    my $class = ref($self) || $self;
+
+    my $session = $self->{'_SESSION_'};
+
+    my $inventory;
+    foreach my $key (keys(%{$self})) {
+        # everything but '_xxx_'
+        $key =~ /^\_.+\_$/ and next;
+        $inventory->{$key} = $self->{$key}
+    }
+
+    my %ret;
+    for my $oid (2..$#INVENTORYKEYS + 2) {
+        $ret{$INVENTORYKEYS[$oid-2]} = &_snmpgetnext($session, '1.3.6.1.2.1.47.1.1.1.1.' . $oid);
+        if (!defined($ret{$INVENTORYKEYS[$oid-2]})) {
+            $LASTERROR = "Cannot get inventory info: $INVENTORYKEYS[$oid-2]";
+            return(undef)
+        }
+    }
+
+    my @Inventory;
+    for my $unit (0..$#{$ret{$INVENTORYKEYS[5]}}) {
+        my %InventoryHash;
+        $InventoryHash{$INVENTORYKEYS[0]}  = $ret{$INVENTORYKEYS[0]}->[$unit];
+        $InventoryHash{$INVENTORYKEYS[1]}  = $ret{$INVENTORYKEYS[1]}->[$unit];
+        $InventoryHash{$INVENTORYKEYS[2]}  = $ret{$INVENTORYKEYS[2]}->[$unit];
+        $InventoryHash{$INVENTORYKEYS[3]}  = $ret{$INVENTORYKEYS[3]}->[$unit];
+        $InventoryHash{$INVENTORYKEYS[4]}  = $ret{$INVENTORYKEYS[4]}->[$unit];
+        $InventoryHash{$INVENTORYKEYS[5]}  = $ret{$INVENTORYKEYS[5]}->[$unit];
+        $InventoryHash{$INVENTORYKEYS[6]}  = $ret{$INVENTORYKEYS[6]}->[$unit];
+        $InventoryHash{$INVENTORYKEYS[7]}  = $ret{$INVENTORYKEYS[7]}->[$unit];
+        $InventoryHash{$INVENTORYKEYS[8]}  = $ret{$INVENTORYKEYS[8]}->[$unit];
+        $InventoryHash{$INVENTORYKEYS[9]}  = $ret{$INVENTORYKEYS[9]}->[$unit];
+        $InventoryHash{$INVENTORYKEYS[10]} = $ret{$INVENTORYKEYS[10]}->[$unit];
+        $InventoryHash{$INVENTORYKEYS[11]} = $ret{$INVENTORYKEYS[11]}->[$unit];
+        $InventoryHash{$INVENTORYKEYS[12]} = $ret{$INVENTORYKEYS[12]}->[$unit];
+        $InventoryHash{$INVENTORYKEYS[13]} = $ret{$INVENTORYKEYS[13]}->[$unit];
+        $InventoryHash{$INVENTORYKEYS[14]} = $ret{$INVENTORYKEYS[14]}->[$unit];
+        push @Inventory, \%InventoryHash
+    }
+    return \@Inventory
+}
+
 ########################################################
 # Subroutines
 ########################################################
@@ -1539,7 +1539,7 @@ sub password_encrypt {
             } else {
                 $start = $index;
                 $end   = $index
-            } 
+            }
         } elsif ($index eq "") {
             # Do them all - currently set for that.
         } else {
@@ -1580,6 +1580,118 @@ sub error {
 ########################################################
 # Start Private subs
 ########################################################
+
+# Return:
+# -1 = error
+#  0 = DONE
+#  1 = continue
+sub _config_copy {
+
+    my ($params, $session, $instance) = @_;
+
+    my $response;
+    my %caterr = (
+        1  => "In Progress",
+        2  => "Success",
+        3  => "No Response",
+        4  => "Too Many Retries",
+        5  => "No Buffers",
+        6  => "No Processes",
+        7  => "Bad Checksum",
+        8  => "Bad Length",
+        9  => "Bad Flash",
+        10 => "Server Error",
+        11 => "User Cancelled",
+        12 => "Wrong Code",
+        13 => "File Not Found",
+        14 => "Invalid TFTP Host",
+        15 => "Invalid TFTP Module",
+        16 => "Access Violation",
+        17 => "Unknown Status",
+        18 => "Invalid Storage Device",
+        19 => "Insufficient Space On Storage Device",
+        20 => "Insufficient Dram Size",
+        21 => "Incompatible Image"
+    );
+
+    if ($params->{'catos'}) {
+        $response = $session->set_request('1.3.6.1.4.1.9.5.1.5.1.0', OCTET_STRING, $params->{'tftpserver'});
+        $response = $session->set_request('1.3.6.1.4.1.9.5.1.5.2.0', OCTET_STRING, $params->{'file'});
+        $response = $session->set_request('1.3.6.1.4.1.9.5.1.5.3.0', INTEGER, 1);
+        if ($params->{'op'} eq 'put') {
+            $response = $session->set_request('1.3.6.1.4.1.9.5.1.5.4.0', INTEGER, 2)
+        } else {
+            $response = $session->set_request('1.3.6.1.4.1.9.5.1.5.4.0', INTEGER, 3)
+        }
+
+        # loop and check response - error if timeout
+        $response = $session->get_request('1.3.6.1.4.1.9.5.1.5.5.0');
+        my $loop = 0;
+        while ($response->{'1.3.6.1.4.1.9.5.1.5.5.0'} == 1) {
+            $response = $session->get_request('1.3.6.1.4.1.9.5.1.5.5.0');
+            if ($loop++ == $params->{'timeout'}) {
+                $LASTERROR = "[CatOS TFTP $params->{'op'}] FAILED: Timeout during completion verification";
+                return -1
+            }
+            sleep 1
+        }
+
+        if ($response->{'1.3.6.1.4.1.9.5.1.5.5.0'} == 2) {
+            return 0
+        } else {
+            $LASTERROR = "[CatOS TFTP $params->{'op'}] FAILED: " . $caterr{$response->{'1.3.6.1.4.1.9.5.1.5.5.0'}};
+            return -1
+        }
+
+    # IOS
+    } else {
+          # ccCopyEntryRowStatus (5 = createAndWait, 6 = destroy)
+        $response = $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.14.' . $instance, INTEGER, 6);
+        $response = $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.14.' . $instance, INTEGER, 5);
+
+          # ccCopyProtocol (1 = TFTP)
+        $response = $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.2.' . $instance, INTEGER, 1);
+
+        if (!defined($response)) {
+            $LASTERROR = "[IOS TFTP $params->{'op'}] NOT SUPPORTED - Trying old way";
+            if ($params->{'op'} eq 'put') {
+                $response = $session->set_request('1.3.6.1.4.1.9.2.1.50.' . $params->{'tftpserver'}, OCTET_STRING, $params->{'file'})
+            } else {
+                $response = $session->set_request('1.3.6.1.4.1.9.2.1.55.' . $params->{'tftpserver'}, OCTET_STRING, $params->{'file'})
+            }
+            if (defined($response)) {
+                return 0
+            } else {
+                $LASTERROR = "[IOS TFTP $params->{'op'}] FAILED (new/old)";
+                return -1
+            }
+        }
+          # ccCopySourceFileType [.3] (1 = networkFile, 3 = startupConfig, 4 = runningConfig)
+          # ccCopyDestFileType [.4] (1 = networkFile, 3 = startupConfig, 4 = runningConfig)
+        if ($params->{'op'} eq 'put') {
+            $response = $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.3.' . $instance, INTEGER, 1);
+            $response = $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.4.' . $instance, INTEGER, $params->{'dest'})
+        } else {
+            $response = $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.3.' . $instance, INTEGER, $params->{'source'});
+            $response = $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.4.' . $instance, INTEGER, 1)
+        }
+          # New way
+          # ccCopyServerAddressType (1 = IPv4, 2 = IPv6)
+        $response = $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.15.' . $instance, INTEGER, 1);
+
+        if (defined($response)) {
+              # ccCopyServerAddressRev1
+            $response = $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.16.' . $instance, OCTET_STRING, $params->{'tftpserver'})
+        } else {
+              # Deprecated
+              # ccCopyServerAddress
+            $response = $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.5.' . $instance, IPADDRESS, $params->{'tftpserver'})
+        }
+          # ccCopyFileName
+        $response = $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.6.' . $instance, OCTET_STRING, $params->{'file'})
+    }
+    return 1
+}
 
 sub _get_range {
 
@@ -1693,17 +1805,19 @@ Valid options are:
 
   Option     Description                            Default
   ------     -----------                            -------
+  -community SNMP read/write community string       private
   -hostname  Remote device to connect to            localhost
   -port      Port to connect to                     161
-  -community SNMP read/write community string       private
   -timeout   Timeout to wait for request in seconds 10
+  -version   SNMP version to use                    1
+  [Additional options available from Net::SNMP module]
 
 =head2 session() - return Net::SNMP session object
 
   $session = $cm->session;
 
-Return the Net::SNMP session object created by the Cisco::Management 
-new() method.  This is useful to call Net::SNMP methods directly without 
+Return the Net::SNMP session object created by the Cisco::Management
+new() method.  This is useful to call Net::SNMP methods directly without
 having to create a new Net::SNMP object.  For example:
 
   my $cm = new Cisco::Management(
@@ -1714,8 +1828,8 @@ having to create a new Net::SNMP object.  For example:
   # get_request() is a Net::SNMP method
   $session->get_request('1.3.6.1.2.1.1.4.0');
 
-In this case, the C<get_request> call is a method provided by the 
-Net::SNMP module that can be accessed directly via the C<$session> 
+In this case, the C<get_request> call is a method provided by the
+Net::SNMP module that can be accessed directly via the C<$session>
 object returned by the C<$cm-E<gt>session()> method.
 
 =head2 close() - close session
@@ -1732,34 +1846,36 @@ Return last error.
 
 =head2 Configuration Management Options
 
-The following methods are for configuration file management.  These 
-methods implement the C<CISCO-CONFIG-COPY-MIB> for configuration file 
-management.  If these operations fail, the older method in 
-C<OLD-CISCO-SYS-MIB> is tried.  All Catalyst OS operations are 
+The following methods are for configuration file management.  These
+methods implement the C<CISCO-CONFIG-COPY-MIB> for configuration file
+management.  If these operations fail, the older method in
+C<OLD-CISCO-SYS-MIB> is tried.  All Catalyst OS operations are
 performed against the C<CISCO-STACK-MIB>.
 
 =head2 config_copy() - configuration file management
 
   my $cc = $cm->config_copy([OPTIONS]);
 
-Manage configuration files.  Options allow for TFTP upload or download 
-of running-config or startup-config and a copy running-config to 
+Manage configuration files.  Options allow for TFTP upload or download
+of running-config or startup-config and a copy running-config to
 startup-config or vice versa.  Valid options are:
 
   Option     Description                            Default
   ------     -----------                            -------
-  -tftp      TFTP server address                    localhost
-  -source    'startup-config', 'running-config'     'running-config'
-             or filename on TFTP server
-  -dest      'startup-config', 'running-config'     'startup-config'
-             or filename for TFTP server
   -catos     Catalyst OS boolean flag.  Enable if   0
              device runs Catalyst OS.
+  -dest      'startup-config', 'running-config'     'startup-config'
+             or filename for TFTP server
+  -source    'startup-config', 'running-config'     'running-config'
+             or filename on TFTP server
+  -tftp      TFTP server address                    localhost
+  -timeout   Seconds until timeout for completion   10
+             check
 
-The default behavior with no options is C<copy running-config 
+The default behavior with no options is C<copy running-config
 startup-config>.
 
-B<NOTE:>  Use care when performing TFTP upload to startup-config.  This 
+B<NOTE:>  Use care when performing TFTP upload to startup-config.  This
 B<MUST> be a B<FULL> configuration file as the config file is B<NOT>
 merged, but instead B<OVERWRITES> the startup-config.
 
@@ -1781,7 +1897,7 @@ system uptime.
 
 =head2 CPU Info
 
-The following methods are for CPU utilization.  These methods 
+The following methods are for CPU utilization.  These methods
 implement the C<CISCO-PROCESS-MIB> and C<OLD-CISCO-SYS-MIB>.
 
 =head2 cpu_info() - return CPU utilization info
@@ -1825,25 +1941,25 @@ as the interface string to resolve.
 
   Option     Description                            Default
   ------     -----------                            -------
-  -interface String to resolve                      -REQUIRED-
   -index     Return ifIndex instead (boolean)       0
+  -interface String to resolve                      -REQUIRED-
 
-Returns a string with the full interface name or ifIndex - if C<-index> 
+Returns a string with the full interface name or ifIndex - if C<-index>
 boolean flag is set.
 
 =head2 interface_info() - return interface info
 
   my $ifs = $cm->interface_info([OPTIONS]);
 
-Populate a data structure with interface information.  Called with no 
-arguments, populates data structure for all interfaces.  Called with 
+Populate a data structure with interface information.  Called with no
+arguments, populates data structure for all interfaces.  Called with
 one argument, interpreted as the interface(s) to retrieve information for.
 
   Option     Description                            Default
   ------     -----------                            -------
   -interface ifIndex or range of ifIndex (, and -)  (all)
 
-Interface information consists of the following MIB entries (exludes 
+Interface information consists of the following MIB entries (exludes
 counter-type interface metrics):
 
   Index
@@ -1873,8 +1989,8 @@ information.
   my $ips = $cm->interface_ip([1]);
 
 Populate a data structure with the IP information per interface.  
-If successful, returns a pointer to a hash containing interface IP 
-information.  For /xx instead of dotted-octet format for mask, use 
+If successful, returns a pointer to a hash containing interface IP
+information.  For /xx instead of dotted-octet format for mask, use
 the optional boolean argument.
 
   $ips->{1}->[0]->{'IPAddress', 'IPMask'}
@@ -2020,10 +2136,10 @@ Consider for example:
 The C<-recursive> option along with an array return value ($ifs, $recur) 
 allows the user to specify 2 return values:  the first is the interface 
 utilization statistics, the second is the interface metrics retrieved 
-in the C<interface_utilization> method's second call to the 
+in the C<interface_utilization> method's second call to the
 C<interface_metrics> method.  Upon first execution, this value is empty 
 and the C<interface_utilization> method calls C<interface_metrics> twice.  
-However, on subsequent calls to the C<interface_utilization> method, it 
+However, on subsequent calls to the C<interface_utilization> method, it
 skips the first call to the C<interface_metrics> method and just uses 
 the previously obtained metrics found in $recur.  This streamlines the 
 utilization calculations by saving time, bandwidth and processing power 
@@ -2040,7 +2156,7 @@ retrieve the metrics (M) at each interval and calculate the utilization
   Utilization 2 = M3 - M2
   Utilization 3 = M4 - M3
 
-B<WITHOUT> the C<-recursive> option, the following less efficient (but 
+B<WITHOUT> the C<-recursive> option, the following less efficient (but
 still effective) operation occurs:
 
    |---- T ---||---- T ---||---- T ---|
@@ -2060,14 +2176,14 @@ interface(s) to admin up.
 
   Option     Description                            Default
   ------     -----------                            -------
-  -operation 'up' or 'down'                         'up'
   -interface ifIndex or range of ifIndex (, and -)  (all)
+  -operation 'up' or 'down'                         'up'
 
 To specify individual interfaces, provide their number:
 
   my $line = $cm->interface_updown(2);
 
-Admin up ifIndex 2.  To specify a range of interfaces, provide a 
+Admin up ifIndex 2.  To specify a range of interfaces, provide a
 range:
 
   my $line = $cm->interface_updown(
@@ -2083,7 +2199,7 @@ admin up/down.
 =head2 Line Options
 
 The following methods are for line management.  Lines on Cisco devices 
-refer to console, auxillary and terminal lines for user interaction.  
+refer to console, auxillary and terminal lines for user interaction.
 These methods implement the C<OLD-CISCO-TS-MIB> which is not available 
 on some newer forms of IOS.
 
@@ -2115,7 +2231,7 @@ If successful, returns a pointer to an array containing the lines cleared.
 
   my $line = $cm->line_info();
 
-Populate a data structure with line information.  If successful, 
+Populate a data structure with line information.  If successful,
 returns a pointer to a hash containing line information.
 
   $line->{0}->{'Number', 'TimeActive', ...}
@@ -2143,7 +2259,7 @@ sessions per the line number.
 
   my $line = $cm->line_message([OPTIONS]);
 
-Send a message to the line.  With no arguments, a "Test Message" is 
+Send a message to the line.  With no arguments, a "Test Message" is
 sent to all lines.  If 1 argument is provided, interpreted as the 
 message to send to all lines.  Valid options are:
 
@@ -2194,50 +2310,51 @@ to proxy ping.  Valid options are:
 
   Option     Description                            Default
   ------     -----------                            -------
-  -host      Destination to send proxy ping to      (localhost)
   -count     Number of pings to send                1
+  -host      Destination to send proxy ping to      (localhost)
   -size      Size of the ping packets in bytes      64
-  -wait      Time to wait for replies in seconds    1
   -vrf       VRF name to source pings from          [none]
+  -wait      Time to wait for replies in seconds    1
 
 Allows the following methods to be called.
 
 =head3 proxy_ping_sent() - return number of pings sent
 
-  $ping->config_copy_sent();
+  $ping->proxy_ping_sent();
 
 Return the number of pings sent in the current proxy ping execution.
 
 =head3 proxy_ping_received() - return number of pings received
 
-  $ping->config_copy_received();
+  $ping->proxy_ping_received();
 
 Return the number of pings received in the current proxy ping execution.
 
 =head3 proxy_ping_minimum() - return minimum round trip time
 
-  $ping->config_copy_minimum();
+  $ping->proxy_ping_minimum();
 
 Return the minimum round trip time in milliseconds of pings sent and 
 received in the current proxy ping execution.
 
 =head3 proxy_ping_average() - return average round trip time
 
-  $ping->config_copy_average();
+  $ping->proxy_ping_average();
 
-Return the average round trip time in milliseconds of pings sent and 
+Return the average round trip time in milliseconds of pings sent and
 received in the current proxy ping execution.
 
 =head3 proxy_ping_maximum() - return maximum round trip time
 
-  $ping->config_copy_maximum();
+  $ping->proxy_ping_maximum();
 
 Return the maximum round trip time in milliseconds of pings sent and 
 received in the current proxy ping execution.
 
 =head2 System Info
 
-The following methods implement the System MIB defined in C<SNMPv2-MIB>.
+The following methods implement the System MIB defined in C<SNMPv2-MIB> 
+and the C<ENTITY-MIB>.
 
 =head2 system_info() - populate system info data structure.
 
@@ -2297,6 +2414,18 @@ use the optional boolean argument.
 
 Return the system OS version as parsed from the sysDescr OID.
 
+=head2 system_inventory() - return system inventory info
+
+  my $inventory = $cm->system_inventory();
+
+Populate a data structure with inventory information.  If successful,
+returns a pointer to an array containing inventory information.
+
+  $inventory->[0]->{'Descr', 'VendorType', ...}
+  $inventory->[1]->{'Descr', 'VendorType', ...}
+  ...
+  $inventory->[n]->{'Descr', 'VendorType', ...}
+
 =head1 SUBROUTINES
 
 Password subroutines are for decrypting and encrypting Cisco type 7 
@@ -2316,11 +2445,11 @@ Where C<00071A150754> is the encrypted Cisco password in this example.
   print "$_\n" for (@{$passwd});
 
 Where C<cleartext> is the clear text string to encrypt.  The second 
-optional argument is a number in the range of 0 - 52 inclusive or 
+optional argument is a number in the range of 0 - 52 inclusive or
 random text.
 
 Returns a pointer to an array constructed based on the second argument 
-to C<password_encrypt>.  
+to C<password_encrypt>.
 
   Option  Description            Action
   ------  -----------            -------
@@ -2343,7 +2472,7 @@ decrypters useless.
 
 Additionally, the Cisco router command prompt seems to be limited to 254 
 characters, making the largest password 250 characters (254 - 4 
-characters for the C<pas > (followed by space) command to enter the 
+characters for the C<pas > (followed by space) command to enter the
 password).  
 
 =head1 EXPORT

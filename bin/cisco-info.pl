@@ -15,6 +15,7 @@ GetOptions(
   'memory!'      => \$opt{mem},
   'Megabytes!'   => \$opt{m},
   'system!'      => \$opt{sys},
+  'V|inventory+' => \$opt{inventory},
   'help!'        => \$opt_help,
   'man!'         => \$opt_man
 ) or pod2usage(-verbose => 0);
@@ -30,6 +31,7 @@ if (!@ARGV) {
 $opt{community} = $opt{community} || 'private';
 if (!defined($opt{cpu}) && 
     !(defined($opt{mem}) || defined($opt{k}) || defined($opt{m})) && 
+    !defined($opt{inventory}) &&
     !defined($opt{sys})) {
     $opt{sys} = 1
 }
@@ -92,6 +94,22 @@ for (@ARGV) {
         }
     }
 
+    if (defined($opt{inventory})) {
+        if (defined(my $inventory = $cm->system_inventory())) {
+            print "NAME                           SN           FIRMREV      SOFTREV\n";
+            print "----------------------------------------------------------------\n";
+            for my $unit (@{$inventory}) {
+                next if (($unit->{SerialNum} eq '') && ($opt{inventory} <= 1));
+                printf "%-30s %-12s %-12s %-18s\n", $unit->{Name}, 
+                                                    $unit->{SerialNum}, 
+                                                    $unit->{FirmwareRev}, 
+                                                    $unit->{SoftwareRev}
+            }
+        } else {
+            printf "Error: %s\n", Cisco::Management->error
+        }
+    }
+
     if (defined($opt{sys})) {
         if (defined(my $sysinfo = $cm->system_info())) {
             printf "Description = %s\n", $sysinfo->system_info_description;
@@ -119,15 +137,16 @@ __END__
 
 =head1 NAME
 
-CISCO-CPUI - Cisco CPU Information
+CISCO-INFO - Cisco Device Information
 
 =head1 SYNOPSIS
 
- cisco-cpui [options] host [...]
+ cisco-info [options] host [...]
 
 =head1 DESCRIPTION
 
-Print CPU information for provided Cisco device.
+Print CPU, memory, system MIB or inventory information for provided 
+Cisco device.
 
 =head1 ARGUMENTS
 
@@ -152,6 +171,11 @@ Print CPU information for provided Cisco device.
 
  -s               Provide system MIB information.
  --system         DEFAULT:  (or not specified) [System info]
+
+ -V [-V]          Provide system inventory from ENTITY-MIB.
+ --inventory        -V    = Only units with serial number.
+                    -V -V = All units.
+                  DEFAULT:  (or not specified) [System info]
 
 =head1 LICENSE
 
