@@ -13,3 +13,4 @@ t/01-Cisco-Pass.t
 test.pl
 lib/Cisco/Management.pm
 META.yml                                 Module meta-data (added by MakeMaker)
+META.json                                Module JSON meta-data (added by MakeMaker)

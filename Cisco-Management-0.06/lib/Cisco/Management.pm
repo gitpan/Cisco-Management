@@ -13,10 +13,16 @@ use strict;
 use Exporter;
 
 use Sys::Hostname;
-use IO::Socket;
+use Socket qw(inet_ntoa AF_INET IPPROTO_TCP);
 use Net::SNMP qw(:asn1 :snmp DEBUG_ALL);
+use Net::IPv6Addr;
 
-our $VERSION      = '0.05';
+my $AF_INET6 = eval { Socket::AF_INET6() };
+my $AF_UNSPEC = eval { Socket::AF_UNSPEC() };
+my $AI_NUMERICHOST = eval { Socket::AI_NUMERICHOST() };
+my $NI_NUMERICHOST = eval { Socket::NI_NUMERICHOST() };
+
+our $VERSION      = '0.06';
 our @ISA          = qw(Exporter);
 our @EXPORT       = qw();
 our %EXPORT_TAGS  = (
@@ -30,11 +36,11 @@ $EXPORT_TAGS{ALL} = [ @EXPORT_OK ];
 # Start Variables
 ########################################################
 # Cisco's XOR key
-my @xlat = ( 0x64, 0x73, 0x66, 0x64, 0x3B, 0x6B, 0x66, 0x6F, 0x41, 0x2C, 
-             0x2E, 0x69, 0x79, 0x65, 0x77, 0x72, 0x6B, 0x6C, 0x64, 0x4A, 
-             0x4B, 0x44, 0x48, 0x53, 0x55, 0x42, 0x73, 0x67, 0x76, 0x63, 
-             0x61, 0x36, 0x39, 0x38, 0x33, 0x34, 0x6E, 0x63, 0x78, 0x76, 
-             0x39, 0x38, 0x37, 0x33, 0x32, 0x35, 0x34, 0x6B, 0x3B, 0x66, 
+my @xlat = ( 0x64, 0x73, 0x66, 0x64, 0x3B, 0x6B, 0x66, 0x6F, 0x41, 0x2C,
+             0x2E, 0x69, 0x79, 0x65, 0x77, 0x72, 0x6B, 0x6C, 0x64, 0x4A,
+             0x4B, 0x44, 0x48, 0x53, 0x55, 0x42, 0x73, 0x67, 0x76, 0x63,
+             0x61, 0x36, 0x39, 0x38, 0x33, 0x34, 0x6E, 0x63, 0x78, 0x76,
+             0x39, 0x38, 0x37, 0x33, 0x32, 0x35, 0x34, 0x6B, 0x3B, 0x66,
              0x67, 0x38, 0x37
            );
 
@@ -65,6 +71,7 @@ sub new {
     my $self = shift;
     my $class = ref($self) || $self;
 
+    my $family;
     my %params = (
         version   => 1,
         port      => 161,
@@ -81,6 +88,19 @@ sub new {
                 $params{'port'} = $args{$_}
             } elsif (/^-?community$/i) {
                 $params{'community'} = $args{$_}
+            } elsif (/^-?family$/i) {
+                 if ($args{$_} =~ /^(?:(?:(:?ip)?v?(?:4|6))|${\AF_INET}|$AF_INET6)$/) {
+                    if ($args{$_} =~ /^(?:(?:(:?ip)?v?4)|${\AF_INET})$/) {
+                        $params{'domain'} = 'udp';
+                        $family = AF_INET
+                    } else {
+                        $params{'domain'} = 'udp6';
+                        $family = $AF_INET6
+                    }
+                } else {
+                    $LASTERROR = "Invalid family `$args{$_}'";
+                    return(undef)
+                }
             } elsif ((/^-?hostname$/i) || (/^-?(?:de?st|peer)?addr$/i)) {
                 $params{'hostname'} = $args{$_}
             } elsif (/^-?timeout$/i) {
@@ -99,6 +119,24 @@ sub new {
         $params{'community'} = 'private'
     }
 
+    # hostname must be defined
+    if (!defined($params{'hostname'})) {
+        $params{'hostname'} = hostname
+    }
+
+    # resolve hostname our way
+    if (defined(my $ret = _resolv($params{'hostname'}, $family))) {
+        $params{'hostname'} = $ret->{'addr'};
+        $family = $ret->{'family'};
+        if ($family == AF_INET) {
+            $params{'domain'} = 'udp'
+        } else {
+            $params{'domain'} = 'udp6'
+        }
+    } else {
+        return undef
+    }
+
     my ($session, $error) = Net::SNMP->session(%params);
 
     if (!defined($session)) {
@@ -108,6 +146,7 @@ sub new {
 
     return bless {
                   %params,       # merge user parameters
+                  'family' => $family,
                   '_SESSION_' => $session
                  }, $class
 }
@@ -135,13 +174,12 @@ sub config_copy {
         catos      => 0,
         timeout    => 10,
         source     => 4,
-        dest       => 3,
-        tftpserver => inet_ntoa((gethostbyname(hostname))[4])
+        dest       => 3
     );
 
     my %args;
     if (@_ == 1) {
-        $LASTERROR = "Insufficient number of args: @_";
+        $LASTERROR = "Insufficient number of args";
         return(undef)
     } else {
         %args = @_;
@@ -154,6 +192,17 @@ sub config_copy {
                 }
             } elsif (/^-?timeout$/i) {
                 $params{'timeout'} = $args{$_}
+            } elsif (/^-?family$/i) {
+                 if ($args{$_} =~ /^(?:(?:(:?ip)?v?(?:4|6))|${\AF_INET}|$AF_INET6)$/) {
+                    if ($args{$_} =~ /^(?:(?:(:?ip)?v?4)|${\AF_INET})$/) {
+                        $params{'family'} = AF_INET
+                    } else {
+                        $params{'family'} = $AF_INET6
+                    }
+                } else {
+                    $LASTERROR = "Invalid family `$args{$_}'";
+                    return(undef)
+                }
             } elsif (/^-?source$/i) {
                 if ($args{$_} =~ /^run(?:ning)?(?:-config)?$/i) {
                     $params{'source'} = 4
@@ -184,6 +233,30 @@ sub config_copy {
         return(undef)
     }
 
+    # tftpserver must be defined if put/get
+    if (($params{'op'} ne "wr") && !defined($params{'tftpserver'})) {
+        $params{'tftpserver'} = hostname
+    }
+
+    # inherit from new()
+    if (!defined($params{'family'})) {
+        $params{'family'} = $self->{'family'};
+    }
+
+    # resolve tftpserver our way
+    if (defined($params{'tftpserver'})) {
+        if (defined(my $ret = _resolv($params{'tftpserver'}, $params{'family'}))) {
+            $params{'tftpserver'} = $ret->{'addr'};
+            $params{'family'}     = $ret->{'family'}
+        } else {
+            return undef
+        }
+        if ($params{'catos'} && ($params{'family'} == $AF_INET6)) {
+            $LASTERROR = "CatOS does not support IPv6";
+            return undef
+        }
+    }
+
     my $response;
     my $instance = int(rand(1024)+1024);
     my %ioserr = (
@@ -201,19 +274,19 @@ sub config_copy {
     # wr mem
     if ($params{'op'} eq 'wr') {
         if ($params{'catos'}) {
-            $LASTERROR = "Copy run start not allowed on CatOS";
+            $LASTERROR = "CatOS does not support `copy run start'";
             return(undef)
         }
         # ccCopyEntryRowStatus (5 = createAndWait, 6 = destroy)
         $response = $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.14.' . $instance, INTEGER, 6);
 
         if (!defined($response)) {
-            $LASTERROR = "[wr mem] NOT SUPPORTED - Trying old way";
+            $LASTERROR = "`copy run start' NOT SUPPORTED - trying old way";
             $response = $session->set_request('1.3.6.1.4.1.9.2.1.54.0', INTEGER, 1);
             if (defined($response)) {
                 return bless $cc, $class
             } else {
-                $LASTERROR = "[wr mem] FAILED (new/old)";
+                $LASTERROR = "`copy run start' FAILED (new and old)";
                 return(undef)
             }
         }
@@ -231,6 +304,7 @@ sub config_copy {
         } elsif ($response == -1) {
             return(undef)
         }
+        # $response == 1, continue ...
     }
 
     # ccCopyEntryRowStatus (4 = createAndGo, 6 = destroy)
@@ -239,7 +313,7 @@ sub config_copy {
     # Check status, wait done
     $response = $session->get_request('1.3.6.1.4.1.9.9.96.1.1.1.1.10.' . $instance);
     if (!defined($response)) {
-        $LASTERROR = "NOT SUPPORTED (after setup)";
+        $LASTERROR = "tftp NOT SUPPORTED (after setup)";
         return(undef)
     }
 
@@ -248,11 +322,11 @@ sub config_copy {
     while ($response->{'1.3.6.1.4.1.9.9.96.1.1.1.1.10.' . $instance} <= 2) {
         $response = $session->get_request('1.3.6.1.4.1.9.9.96.1.1.1.1.10.' . $instance);
         if (!defined($response)) {
-            $LASTERROR = "[IOS TFTP $params{'op'}] FAILED: Cannot verify completion";
+            $LASTERROR = "IOS TFTP `$params{'op'}' FAILED - cannot verify completion";
             return(undef)
         }
         if ($loop++ == $params{'timeout'}) {
-            $LASTERROR = "[IOS TFTP $params{'op'}] FAILED: Timeout during completion verification";
+            $LASTERROR = "IOS TFTP `$params{'op'}' FAILED - timeout during completion verification";
             return(undef)
         }
         sleep 1
@@ -270,7 +344,7 @@ sub config_copy {
     } elsif ($response->{'1.3.6.1.4.1.9.9.96.1.1.1.1.10.' . $instance} == 4) {
         $response = $session->get_request('1.3.6.1.4.1.9.9.96.1.1.1.1.13.' . $instance);
         $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.14.' . $instance, INTEGER, 6);
-        $LASTERROR = "[IOS TFTP $params{'op'}] FAILED: " . $ioserr{$response->{'1.3.6.1.4.1.9.9.96.1.1.1.1.13.' . $instance}};
+        $LASTERROR = "IOS TFTP `$params{'op'}' FAILED - " . $ioserr{$response->{'1.3.6.1.4.1.9.9.96.1.1.1.1.13.' . $instance}};
         return(undef)
     } else {
         $LASTERROR = "Cannot determine success or failure";
@@ -323,7 +397,7 @@ sub cpu_info {
             if (defined(my $result = $session->get_request( -varbindlist => ['1.3.6.1.2.1.47.1.1.1.1.7.' . $temp->[$_]] ))) {
                 $cpuName[$_] = $result->{'1.3.6.1.2.1.47.1.1.1.1.7.' . $temp->[$_]}
             } else {
-                $LASTERROR = "Cannot get CPU name for type: $cpuType{$type}";
+                $LASTERROR = "Cannot get CPU name for type `$cpuType{$type}'";
                 return(undef)
             }
         }
@@ -342,7 +416,7 @@ sub cpu_info {
         $cpu5min = &_snmpgetnext($session,"1.3.6.1.4.1.9.9.109.1.1.1.1.8");
         $cpu5sec = &_snmpgetnext($session,"1.3.6.1.4.1.9.9.109.1.1.1.1.6");
         $cpu1min = &_snmpgetnext($session,"1.3.6.1.4.1.9.9.109.1.1.1.1.7")
-    } else { } 
+    } else { }
 
     my @CPUInfo;
     for my $cpu (0..$#{$cpu5min}) {
@@ -368,7 +442,7 @@ sub interface_getbyindex {
     if (@_ == 1) {
         ($uIfx) = @_;
         if ($uIfx !~ /^\d+$/) {
-            $LASTERROR = "Not a valid ifIndex: $uIfx";
+            $LASTERROR = "Invalid ifIndex `$uIfx'";
             return(undef)
         }
     } else {
@@ -378,7 +452,7 @@ sub interface_getbyindex {
                 if ($args{$_} =~ /^\d+$/) {
                     $uIfx = $args{$_}
                 } else {
-                    $LASTERROR = "Not a valid ifIndex: $args{$_}";
+                    $LASTERROR = "Invalid ifIndex `$args{$_}'";
                     return(undef)
                 }
             }
@@ -400,7 +474,7 @@ sub interface_getbyindex {
             return $rIf->[$_]
         }
     }
-    $LASTERROR = "Cannot find interface for ifIndex: $uIfx";
+    $LASTERROR = "Cannot get interface for ifIndex `$uIfx'";
     return(undef)
 }
 
@@ -467,10 +541,10 @@ sub interface_getbyname {
             return $idx
         }
     } elsif (@matches == 0) {
-        $LASTERROR = "Cannot find interface: $params{'uIf'}";
+        $LASTERROR = "Cannot find interface `$params{'uIf'}'";
         return(undef)
     } else {
-        print "Interface $params{'uIf'} not specific - [@matches]";
+        print "Interface `$params{'uIf'}' not specific enough - [@matches]";
         return(undef)
     }
 }
@@ -516,7 +590,7 @@ sub interface_info {
         for my $oid (1..$#IFKEYS) {
             $ret{$IFKEYS[$oid-1]} = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.' . $oid . $interface);
             if (!defined($ret{$IFKEYS[$oid-1]})) {
-                $LASTERROR = "Cannot get interface info: $IFKEYS[$oid-1] interface: $interface";
+                $LASTERROR = "Cannot get interface `$interface' `$IFKEYS[$oid-1]'";
                 return(undef)
             }
         }
@@ -641,7 +715,7 @@ sub interface_metrics {
                         if (exists($params{ucfirst(lc($mets))})) {
                             $params{ucfirst(lc($mets))} = 1
                         } else {
-                            $LASTERROR = "Invalid metric: $mets";
+                            $LASTERROR = "Invalid metric `$mets'";
                             return(undef)
                         }
                     }
@@ -650,7 +724,7 @@ sub interface_metrics {
                     if (exists($params{ucfirst(lc($args{$_}))})) {
                         $params{ucfirst(lc($args{$_}))} = 1
                     } else {
-                        $LASTERROR = "Invalid metric: $args{$_}";
+                        $LASTERROR = "Invalid metric `$args{$_}'";
                         return(undef)
                     }
                 }
@@ -671,7 +745,7 @@ sub interface_metrics {
         my %ret;
         $ret{'Index'} = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.1' . $interface);
         if (!defined($ret{'Index'})) {
-            $LASTERROR = "Cannot get ifIndex: $interface";
+            $LASTERROR = "Cannot get ifIndex `$interface'";
             return(undef)
         }
         # multicasts
@@ -679,13 +753,13 @@ sub interface_metrics {
             # In
             $ret{$IFMETRICKEYS[0]} = &_snmpgetnext($session, '1.3.6.1.2.1.31.1.1.1.2' . $interface);
             if (!defined($ret{$IFMETRICKEYS[0]})) {
-                $LASTERROR = "Cannot get $IFMETRICKEYS[0] interface: $interface";
+                $LASTERROR = "Cannot get interface `$interface' `$IFMETRICKEYS[0]'";
                 return(undef)
             }
             # Out
             $ret{$IFMETRICKEYS[1]} = &_snmpgetnext($session, '1.3.6.1.2.1.31.1.1.1.4' . $interface);
             if (!defined($ret{$IFMETRICKEYS[1]})) {
-                $LASTERROR = "Cannot get $IFMETRICKEYS[1] interface: $interface";
+                $LASTERROR = "Cannot get interface `$interface' `$IFMETRICKEYS[1]'";
                 return(undef)
             }
         }
@@ -694,13 +768,13 @@ sub interface_metrics {
             # In
             $ret{$IFMETRICKEYS[2]} = &_snmpgetnext($session, '1.3.6.1.2.1.31.1.1.1.3' . $interface);
             if (!defined($ret{$IFMETRICKEYS[2]})) {
-                $LASTERROR = "Cannot get $IFMETRICKEYS[2] interface: $interface";
+                $LASTERROR = "Cannot get interface `$interface' `$IFMETRICKEYS[2]'";
                 return(undef)
             }
             # Out
             $ret{$IFMETRICKEYS[3]} = &_snmpgetnext($session, '1.3.6.1.2.1.31.1.1.1.5' . $interface);
             if (!defined($ret{$IFMETRICKEYS[3]})) {
-                $LASTERROR = "Cannot get $IFMETRICKEYS[3] interface: $interface";
+                $LASTERROR = "Cannot get interface `$interface' `$IFMETRICKEYS[3]'";
                 return(undef)
             }
         }
@@ -709,13 +783,13 @@ sub interface_metrics {
             # In
             $ret{$IFMETRICKEYS[4]} = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.10' . $interface);
             if (!defined($ret{$IFMETRICKEYS[4]})) {
-                $LASTERROR = "Cannot get $IFMETRICKEYS[4] interface: $interface";
+                $LASTERROR = "Cannot get interface `$interface' `$IFMETRICKEYS[4]'";
                 return(undef)
             }
             # Out
             $ret{$IFMETRICKEYS[5]} = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.16' . $interface);
             if (!defined($ret{$IFMETRICKEYS[5]})) {
-                $LASTERROR = "Cannot get $IFMETRICKEYS[5] interface: $interface";
+                $LASTERROR = "Cannot get interface `$interface' `$IFMETRICKEYS[5]'";
                 return(undef)
             }
         }
@@ -724,13 +798,13 @@ sub interface_metrics {
             # In
             $ret{$IFMETRICKEYS[6]} = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.11' . $interface);
             if (!defined($ret{$IFMETRICKEYS[6]})) {
-                $LASTERROR = "Cannot get $IFMETRICKEYS[6] interface: $interface";
+                $LASTERROR = "Cannot get interface `$interface' `$IFMETRICKEYS[6]'";
                 return(undef)
             }
             # Out
             $ret{$IFMETRICKEYS[7]} = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.17' . $interface);
             if (!defined($ret{$IFMETRICKEYS[7]})) {
-                $LASTERROR = "Cannot get $IFMETRICKEYS[7] interface: $interface";
+                $LASTERROR = "Cannot get interface `$interface' `$IFMETRICKEYS[7]'";
                 return(undef)
             }
         }
@@ -739,13 +813,13 @@ sub interface_metrics {
             # In
             $ret{$IFMETRICKEYS[8]} = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.13' . $interface);
             if (!defined($ret{$IFMETRICKEYS[8]})) {
-                $LASTERROR = "Cannot get $IFMETRICKEYS[8] interface: $interface";
+                $LASTERROR = "Cannot get interface `$interface' `$IFMETRICKEYS[8]'";
                 return(undef)
             }
             # Out
             $ret{$IFMETRICKEYS[9]} = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.19' . $interface);
             if (!defined($ret{$IFMETRICKEYS[9]})) {
-                $LASTERROR = "Cannot get $IFMETRICKEYS[9] interface: $interface";
+                $LASTERROR = "Cannot get interface `$interface' `$IFMETRICKEYS[9]'";
                 return(undef)
             }
         }
@@ -754,13 +828,13 @@ sub interface_metrics {
             # In
             $ret{$IFMETRICKEYS[10]} = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.14' . $interface);
             if (!defined($ret{$IFMETRICKEYS[10]})) {
-                $LASTERROR = "Cannot get $IFMETRICKEYS[10] interface: $interface";
+                $LASTERROR = "Cannot get interface `$interface' `$IFMETRICKEYS[10]'";
                 return(undef)
             }
             # Out
             $ret{$IFMETRICKEYS[11]} = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.20' . $interface);
             if (!defined($ret{$IFMETRICKEYS[11]})) {
-                $LASTERROR = "Cannot get $IFMETRICKEYS[11] interface: $interface";
+                $LASTERROR = "Cannot get interface `$interface' `$IFMETRICKEYS[11]'";
                 return(undef)
             }
         }
@@ -769,7 +843,7 @@ sub interface_metrics {
             # In
             $ret{$IFMETRICKEYS[12]}  = &_snmpgetnext($session, '1.3.6.1.2.1.2.2.1.15' . $interface);
             if (!defined($ret{$IFMETRICKEYS[12]})) {
-                $LASTERROR = "Cannot get $IFMETRICKEYS[12] interface: $interface";
+                $LASTERROR = "Cannot get interface `$interface' `$IFMETRICKEYS[12]'";
                 return(undef)
             }
         }
@@ -813,7 +887,7 @@ sub interface_utilization {
                 if (($args{$_} =~ /^\d+$/) && ($args{$_} > 0)) {
                     $params{'polling'} = $args{$_}
                 } else {
-                    $LASTERROR = "Incorrect polling interval: $args{$_}";
+                    $LASTERROR = "Invalid polling interval `$args{$_}'";
                     return(undef)
                 }
             } elsif (/^-?recursive$/i) {
@@ -857,7 +931,7 @@ sub interface_utilization {
         $IfUtil{$ifs} = bless \%IfUtilHash
     }
     $prev = bless \%IfUtil, $class;
-    return wantarray ? ($prev, $curr) : $prev 
+    return wantarray ? ($prev, $curr) : $prev
 }
 
 sub interface_updown {
@@ -893,7 +967,7 @@ sub interface_updown {
                     $params{'oper'} = $op{uc($args{$_})};
                     $oper = uc($args{$_})
                 } else {
-                    $LASTERROR = "Undefined operation";
+                    $LASTERROR = "Invalid operation `$args{$_}'";
                     return(undef)
                 }
             }
@@ -974,7 +1048,7 @@ sub line_info {
     for my $oid (1..$#LINEKEYS + 1) {
         $ret{$LINEKEYS[$oid-1]} = &_snmpgetnext($session, '1.3.6.1.4.1.9.2.9.2.1.' . $oid);
         if (!defined($ret{$LINEKEYS[$oid-1]})) {
-            $LASTERROR = "Cannot get line info: $LINEKEYS[$oid-1]";
+            $LASTERROR = "Cannot get line `$LINEKEYS[$oid-1]' info";
             return(undef)
         }
     }
@@ -1042,7 +1116,7 @@ sub line_sessions {
     for my $oid (1..$#SESSIONKEYS + 1) {
         $ret{$SESSIONKEYS[$oid-1]} = &_snmpgetnext($session, '1.3.6.1.4.1.9.2.9.3.1.' . $oid);
         if (!defined($ret{$SESSIONKEYS[$oid-1]})) {
-            $LASTERROR = "Cannot get session info: $SESSIONKEYS[$oid-1]";
+            $LASTERROR = "Cannot get session `$SESSIONKEYS[$oid-1]' info";
             return(undef)
         }
     }
@@ -1143,7 +1217,7 @@ sub line_numberof {
 
     my $response;
     if (!defined($response = $session->get_request( -varbindlist => ['1.3.6.1.4.1.9.2.9.1.0'] ))) {
-        $LASTERROR = "Cannot retrieve number of lines";
+        $LASTERROR = "Cannot get number of lines";
         return(undef)
     } else {
         return $response->{'1.3.6.1.4.1.9.2.9.1.0'}
@@ -1161,7 +1235,7 @@ sub memory_info {
     for my $oid (2..$#MEMKEYS + 1) {
         $ret{$MEMKEYS[$oid-2]} = &_snmpgetnext($session, '1.3.6.1.4.1.9.9.48.1.1.1.' . $oid);
         if (!defined($ret{$MEMKEYS[$oid-2]})) {
-            $LASTERROR = "Cannot get memory info: $MEMKEYS[$oid-2]";
+            $LASTERROR = "Cannot get memory `$MEMKEYS[$oid-2]' info";
             return(undef)
         }
     }
@@ -1195,51 +1269,49 @@ sub proxy_ping {
     }
 
     my %params = (
-        count => 1,
-        host  => inet_ntoa((gethostbyname(hostname))[4]),
-        size  => 64,
-        wait  => 1
+        count  => 1,
+        size   => 64,
+        wait   => 1,
     );
 
     my %args;
     if (@_ == 1) {
         ($params{'host'}) = @_;
-        if (defined(gethostbyname($params{'host'}))) {
-            $params{'host'} = inet_ntoa((gethostbyname($params{'host'}))[4])
-        } else {
-            $LASTERROR = "Cannot resolve IP for $params{'host'}";
-            return(undef)
-        }
     } else {
         %args = @_;
         for (keys(%args)) {
             if ((/^-?host(?:name)?$/i) || (/^-?dest(?:ination)?$/i)) {
                 $params{'host'} = $args{$_};
-                if (defined(gethostbyname($params{'host'}))) {
-                    $params{'host'} = inet_ntoa((gethostbyname($params{'host'}))[4])
-                } else {
-                    $LASTERROR = "Cannot resolve IP for $params{'host'}";
-                    return(undef)
-                }
             } elsif (/^-?size$/i) {
                 if ($args{$_} =~ /^\d+$/) {
                     $params{'size'} = $args{$_}
                 } else {
-                    $LASTERROR = "Invalid size: $args{$_}";
+                    $LASTERROR = "Invalid size `$args{$_}'";
+                    return(undef)
+                }
+            } elsif (/^-?family$/i) {
+                 if ($args{$_} =~ /^(?:(?:(:?ip)?v?(?:4|6))|${\AF_INET}|$AF_INET6)$/) {
+                    if ($args{$_} =~ /^(?:(?:(:?ip)?v?4)|${\AF_INET})$/) {
+                        $params{'family'} = AF_INET
+                    } else {
+                        $params{'family'} = $AF_INET6
+                    }
+                } else {
+                    $LASTERROR = "Invalid family `$args{$_}'";
                     return(undef)
                 }
             } elsif (/^-?count$/i) {
                 if ($args{$_} =~ /^\d+$/) {
                     $params{'count'} = $args{$_}
                 } else {
-                    $LASTERROR = "Invalid count: $args{$_}";
+                    $LASTERROR = "Invalid count `$args{$_}'";
                     return(undef)
                 }
             } elsif ((/^-?wait$/i) || (/^-?timeout$/i)) {
                 if ($args{$_} =~ /^\d+$/) {
                     $params{'wait'} = $args{$_}
                 } else {
-                    $LASTERROR = "Invalid wait time: $args{$_}";
+                    $LASTERROR = "Invalid wait time `$args{$_}'";
                     return(undef)
                 }
             } elsif (/^-?vrf(?:name)?$/i) {
@@ -1249,18 +1321,42 @@ sub proxy_ping {
     }
     $pp->{_PROXYPING_}{'_params_'} = \%params;
 
+    # host must be defined
+    if (!defined($params{'host'})) {
+        $params{'host'} = hostname
+    }
+
+    # inherit from new()
+    if (!defined($params{'family'})) {
+        $params{'family'} = $self->{'family'};
+    }
+
+    # resolve host our way
+    if (defined(my $ret = _resolv($params{'host'}, $params{'family'}))) {
+        $params{'host'}   = $ret->{'addr'};
+        $params{'family'} = $ret->{'family'}
+    } else {
+        return undef
+    }
+
     my $instance = int(rand(1024)+1024);
       # Prepare object by clearing row
     my $response = $session->set_request('1.3.6.1.4.1.9.9.16.1.1.1.16.' . $instance, INTEGER, 6);
     if (!defined($response)) {
-        $LASTERROR = "NOT SUPPORTED";
+        $LASTERROR = "proxy ping NOT SUPPORTED";
         return(undef)
     }
 
     # Convert destination to Hex equivalent
     my $dest;
-    for (split(/\./, $params{'host'})) {
-        $dest .= sprintf("%02x",$_)
+    if ($params{'family'} == AF_INET) {
+        for (split(/\./, $params{'host'})) {
+            $dest .= sprintf("%02x",$_)
+        }
+    } else {
+        my $addr = Net::IPv6Addr->new($params{'host'});
+        my @dest = $addr->to_array;
+        $dest .= join '', $_ for (@dest);
     }
 
       # ciscoPingEntryStatus (5 = createAndWait, 6 = destroy)
@@ -1268,8 +1364,12 @@ sub proxy_ping {
     $response = $session->set_request('1.3.6.1.4.1.9.9.16.1.1.1.16.' . $instance, INTEGER, 5);
       # ciscoPingEntryOwner (<anyname>)
     $response = $session->set_request('1.3.6.1.4.1.9.9.16.1.1.1.15.' . $instance, OCTET_STRING, __PACKAGE__);
-      # ciscoPingProtocol (1 = IP)
-    $response = $session->set_request('1.3.6.1.4.1.9.9.16.1.1.1.2.' . $instance, INTEGER, 1);
+      # ciscoPingProtocol (1 = IP, 20 = IPv6)
+    $response = $session->set_request('1.3.6.1.4.1.9.9.16.1.1.1.2.' . $instance, INTEGER, ($params{'family'} == AF_INET) ? 1 : 20);
+    if (!defined($response)) {
+        $LASTERROR = "Device does not support ciscoPingProtocol 20 (IPv6)";
+        return(undef)
+    }
       # ciscoPingAddress (NOTE: hex string, not regular IP)
     $response = $session->set_request('1.3.6.1.4.1.9.9.16.1.1.1.3.' . $instance, OCTET_STRING, pack('H*', $dest));
       # ciscoPingPacketTimeout (in ms)
@@ -1293,7 +1393,7 @@ sub proxy_ping {
             return(undef)
         }
     } else {
-        $LASTERROR = "NOT SUPPORTED (after setup)";
+        $LASTERROR = "proxy ping NOT SUPPORTED (after setup)";
         return(undef)
     }
 
@@ -1452,7 +1552,7 @@ sub system_inventory {
     for my $oid (2..$#INVENTORYKEYS + 2) {
         $ret{$INVENTORYKEYS[$oid-2]} = &_snmpgetnext($session, '1.3.6.1.2.1.47.1.1.1.1.' . $oid);
         if (!defined($ret{$INVENTORYKEYS[$oid-2]})) {
-            $LASTERROR = "Cannot get inventory info: $INVENTORYKEYS[$oid-2]";
+            $LASTERROR = "Cannot get inventory `$INVENTORYKEYS[$oid-2]' info";
             return(undef)
         }
     }
@@ -1510,7 +1610,7 @@ sub password_decrypt {
             return $dec
         }
     }
-    $LASTERROR = "Invalid Password: $passwd";
+    $LASTERROR = "Invalid password `$passwd'";
     return(0)
 }
 
@@ -1630,7 +1730,7 @@ sub _config_copy {
         while ($response->{'1.3.6.1.4.1.9.5.1.5.5.0'} == 1) {
             $response = $session->get_request('1.3.6.1.4.1.9.5.1.5.5.0');
             if ($loop++ == $params->{'timeout'}) {
-                $LASTERROR = "[CatOS TFTP $params->{'op'}] FAILED: Timeout during completion verification";
+                $LASTERROR = "CatOS TFTP `$params->{'op'}' FAILED - timeout during completion verification";
                 return -1
             }
             sleep 1
@@ -1639,7 +1739,7 @@ sub _config_copy {
         if ($response->{'1.3.6.1.4.1.9.5.1.5.5.0'} == 2) {
             return 0
         } else {
-            $LASTERROR = "[CatOS TFTP $params->{'op'}] FAILED: " . $caterr{$response->{'1.3.6.1.4.1.9.5.1.5.5.0'}};
+            $LASTERROR = "CatOS TFTP `$params->{'op'}' FAILED - " . $caterr{$response->{'1.3.6.1.4.1.9.5.1.5.5.0'}};
             return -1
         }
 
@@ -1653,7 +1753,11 @@ sub _config_copy {
         $response = $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.2.' . $instance, INTEGER, 1);
 
         if (!defined($response)) {
-            $LASTERROR = "[IOS TFTP $params->{'op'}] NOT SUPPORTED - Trying old way";
+            $LASTERROR = "IOS TFTP `$params->{'op'}' NOT SUPPORTED - trying old way";
+            if ($params->{'family'} == $AF_INET6) {
+                $LASTERROR = "IOS TFTP `$params->{'op'}' old way does not support IPv6";
+                return -1
+            }
             if ($params->{'op'} eq 'put') {
                 $response = $session->set_request('1.3.6.1.4.1.9.2.1.50.' . $params->{'tftpserver'}, OCTET_STRING, $params->{'file'})
             } else {
@@ -1662,7 +1766,7 @@ sub _config_copy {
             if (defined($response)) {
                 return 0
             } else {
-                $LASTERROR = "[IOS TFTP $params->{'op'}] FAILED (new/old)";
+                $LASTERROR = "IOS TFTP `$params->{'op'}' FAILED (new and old)";
                 return -1
             }
         }
@@ -1677,7 +1781,7 @@ sub _config_copy {
         }
           # New way
           # ccCopyServerAddressType (1 = IPv4, 2 = IPv6)
-        $response = $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.15.' . $instance, INTEGER, 1);
+        $response = $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.15.' . $instance, INTEGER, ($params->{'family'} == AF_INET) ? 1 : 2);
 
         if (defined($response)) {
               # ccCopyServerAddressRev1
@@ -1685,6 +1789,10 @@ sub _config_copy {
         } else {
               # Deprecated
               # ccCopyServerAddress
+            if ($params->{'family'} == $AF_INET6) {
+                $LASTERROR = "ccCopyServerAddressRev1 not supported (requried for IPv6)";
+                return -1
+            }
             $response = $session->set_request('1.3.6.1.4.1.9.9.96.1.1.1.1.5.' . $instance, IPADDRESS, $params->{'tftpserver'})
         }
           # ccCopyFileName
@@ -1700,7 +1808,7 @@ sub _get_range {
     # If argument, it must be a number range in the form:
     #  1,9-11,7,3-5,15
     if ($opt !~ /^\d+([\,\-]\d+)*$/) {
-        $LASTERROR = "Incorrect range format: $opt";
+        $LASTERROR = "Invalid range format `$opt'";
         return(undef)
     }
 
@@ -1765,6 +1873,130 @@ sub _snmpgetnext {
 }
 
 ########################################################
+# DNS hostname resolution
+# return:
+#   $host->{name}   = host - as passed in
+#   $host->{host}   = host - as passed in without :port
+#   $host->{port}   = OPTIONAL - if :port, then value of port
+#   $host->{addr}   = resolved numeric address
+#   $host->{family} = AF_INET/6
+############################
+sub _resolv {
+    my ($name, $family) = @_;
+
+    my %h;
+    $h{name} = $name;
+
+    # Default to IPv4 for backward compatiblity
+    # THIS MAY CHANGE IN THE FUTURE!!!
+    if (!defined($family)) {
+        $family = AF_INET
+    }
+
+# START - host:port
+    my $cnt = 0;
+
+    # Count ":"
+    $cnt++ while ($name =~ m/:/g);
+
+    # 0 = hostname or IPv4 address
+    if ($cnt == 0) {
+        $h{host} = $name
+    # 1 = IPv4 address with port
+    } elsif ($cnt == 1) {
+        ($h{host}, $h{port}) = split /:/, $name
+    # >=2 = IPv6 address
+    } elsif ($cnt >= 2) {
+        #IPv6 with port - [2001::1]:port
+        if ($name =~ /^\[.*\]:\d{1,5}$/) {
+            ($h{host}, $h{port}) = split /:([^:]+)$/, $name # split after last :
+        # IPv6 without port
+        } else {
+            $h{host} = $name
+        }
+    }
+
+    # Clean up host
+    $h{host} =~ s/\[//g;
+    $h{host} =~ s/\]//g;
+    # Clean up port
+    if (defined($h{port}) && (($h{port} !~ /^\d{1,5}$/) || ($h{port} < 1) || ($h{port} > 65535))) {
+        $LASTERROR = "Invalid port `$h{port}' in `$name'";
+        return undef
+    }
+# END - host:port
+
+    # address check
+    # new way
+    if ($Socket::VERSION >= 1.94) {
+        my %hints = (
+            family   => $AF_UNSPEC,
+            protocol => IPPROTO_TCP,
+            flags => $AI_NUMERICHOST
+        );
+
+        # numeric address, return
+        my ($err, @getaddr) = Socket::getaddrinfo($h{host}, undef, \%hints);
+        if (defined($getaddr[0])) {
+            $h{addr}   = $h{host};
+            $h{family} = $getaddr[0]->{family};
+            return \%h
+        }
+    # old way
+    } else {
+        # numeric address, return
+        my $ret = gethostbyname($h{host});
+        if (defined($ret) && (inet_ntoa($ret) eq $h{host})) {
+            $h{addr}   = $h{host};
+            $h{family} = AF_INET;
+            return \%h
+        }
+    }
+
+    # resolve
+    # new way
+    if ($Socket::VERSION >= 1.94) {
+        my %hints = (
+            family   => $family,
+            protocol => IPPROTO_TCP
+        );
+
+        my ($err, @getaddr) = Socket::getaddrinfo($h{host}, undef, \%hints);
+        if (defined($getaddr[0])) {
+            my ($err, $address) = Socket::getnameinfo($getaddr[0]->{addr}, $NI_NUMERICHOST);
+            if (defined($address)) {
+                $h{addr} = $address;
+                $h{addr} =~ s/\%(.)*$//; # remove %ifID if IPv6
+                $h{family} = $getaddr[0]->{family};
+                return \%h
+            } else {
+                $LASTERROR = "getnameinfo($getaddr[0]->{addr}) failed - $err";
+                return undef
+            }
+        } else {
+            $LASTERROR = sprintf "getaddrinfo($h{host},,%s) failed - $err", ($family == AF_INET) ? "AF_INET" : "AF_INET6";
+            return undef
+        }
+    # old way
+    } else {
+        if ($family == $AF_INET6) {
+            $LASTERROR = "Socket >= 1.94 required for IPv6 - found Socket $Socket::VERSION";
+            return undef
+        }
+
+        my @gethost = gethostbyname($h{host});
+        if (defined($gethost[4])) {
+            $h{addr} = inet_ntoa($gethost[4]);
+            $h{family} = AF_INET;
+            return \%h
+        } else {
+            $LASTERROR = "gethostbyname($h{host}) failed - $^E";
+            return undef
+        }
+    }
+}
+
+########################################################
 # End Private subs
 ########################################################
 
@@ -1786,50 +2018,63 @@ Cisco::Management - Interface for Cisco Management
 
 =head1 DESCRIPTION
 
-Cisco::Management is a class implementing several management functions 
-for Cisco devices - mostly via SNMP.  Cisco::Management uses the 
-Net::SNMP module to do the SNMP calls.
+B<Cisco::Management> is a class implementing several management functions
+for Cisco devices - mostly via SNMP.  B<Cisco::Management> uses the
+B<Net::SNMP> module to do the SNMP calls.
+
+=head1 CAVEATS
+
+As of version 0.06, B<Cisco::Management> supports IPv6 on systems with IPv6
+configured but requires B<Socket> version 1.94 or greater.  This may cause
+issues on Perl versions less than 5.14, where the default B<Socket> module
+is of a lesser version.  The requirement stems from the use of the
+C<getaddrinfo()> and C<getnameinfo()> functions not available on older
+versions of B<Socket>.
 
 =head1 METHODS
 
 =head2 new() - create a new Cisco::Management object
 
-  my $cm = new Cisco::Management([OPTIONS]);
-
-or
-
   my $cm = Cisco::Management->new([OPTIONS]);
 
-Create a new Cisco::Management object with OPTIONS as optional parameters.
+Create a new B<Cisco::Management> object with OPTIONS as optional parameters.
 Valid options are:
 
   Option     Description                            Default
   ------     -----------                            -------
   -community SNMP read/write community string       private
+  -family    Address family IPv4/IPv6               IPv4
+               Valid values for IPv4:
+                 4, v4, ip4, ipv4, AF_INET (constant)
+               Valid values for IPv6:
+                 6, v6, ip6, ipv6, AF_INET6 (constant)
   -hostname  Remote device to connect to            localhost
   -port      Port to connect to                     161
   -timeout   Timeout to wait for request in seconds 10
   -version   SNMP version to use                    1
   [Additional options available from Net::SNMP module]
 
+B<Family> provides hint for resolving names provided for B<hostname>
+to addresses.
+
 =head2 session() - return Net::SNMP session object
 
   $session = $cm->session;
 
-Return the Net::SNMP session object created by the Cisco::Management
-new() method.  This is useful to call Net::SNMP methods directly without
-having to create a new Net::SNMP object.  For example:
+Return the B<Net::SNMP> session object created by the B<Cisco::Management>
+new() method.  This is useful to call B<Net::SNMP> methods directly without
+having to create a new B<Net::SNMP> object.  For example:
 
-  my $cm = new Cisco::Management(
-                                 -host      => 'router1',
-                                 -community => 'snmpRW'
-                                );
+  my $cm = Cisco::Management->new(
+      -host      => 'router1',
+      -community => 'snmpRW'
+  );
   my $session = $cm->session();
   # get_request() is a Net::SNMP method
   $session->get_request('1.3.6.1.2.1.1.4.0');
 
 In this case, the C<get_request> call is a method provided by the
-Net::SNMP module that can be accessed directly via the C<$session>
+B<Net::SNMP> module that can be accessed directly via the C<$session>
 object returned by the C<$cm-E<gt>session()> method.
 
 =head2 close() - close session
@@ -1866,6 +2111,11 @@ startup-config or vice versa.  Valid options are:
              device runs Catalyst OS.
   -dest      'startup-config', 'running-config'     'startup-config'
              or filename for TFTP server
+  -family    Address family IPv4/IPv6               [Inherit from new()]
+               Valid values for IPv4:
+                 4, v4, ip4, ipv4, AF_INET (constant)
+               Valid values for IPv6:
+                 6, v6, ip6, ipv6, AF_INET6 (constant)
   -source    'startup-config', 'running-config'     'running-config'
              or filename on TFTP server
   -tftp      TFTP server address                    localhost
@@ -1879,20 +2129,24 @@ B<NOTE:>  Use care when performing TFTP upload to startup-config.  This
 B<MUST> be a B<FULL> configuration file as the config file is B<NOT>
 merged, but instead B<OVERWRITES> the startup-config.
 
+A hostname value for B<tftp> will be resolved to IPv4/v6 based on B<family>.
+B<Family> is inherited from the value set in new() but can be overriden.
+Providing a numeric address will also self-determine the IPv4/v6 address.
+
 Allows the following methods to be called.
 
 =head3 config_copy_starttime() - return config copy start time
 
   $cc->config_copy_starttime();
 
-Return the start time of the configuration copy operation relative to 
+Return the start time of the configuration copy operation relative to
 system uptime.
 
 =head3 config_copy_endtime() - return config copy end time
 
   $cc->config_copy_endtime();
 
-Return the end time of the configuration copy operation relative to 
+Return the end time of the configuration copy operation relative to
 system uptime.
 
 =head2 CPU Info
@@ -1904,7 +2158,7 @@ implement the C<CISCO-PROCESS-MIB> and C<OLD-CISCO-SYS-MIB>.
 
   my $cpuinfo = $cm->cpu_info();
 
-Populate a data structure with CPU information.  If successful, 
+Populate a data structure with CPU information.  If successful,
 returns pointer to an array containing CPU information.
 
   $cpuinfo->[0]->{'Name', '5sec', '1min', ...}
@@ -1914,14 +2168,14 @@ returns pointer to an array containing CPU information.
 
 =head2 Interface Options
 
-The following methods are for interface management.  These methods 
+The following methods are for interface management.  These methods
 implement the C<IF-MIB>.
 
 =head2 interface_getbyindex() - get interface name by ifIndex
 
   my $line = $cm->interface_getbyindex([OPTIONS]);
 
-Resolve an ifIndex to the full interface name.  Called with one 
+Resolve an ifIndex to the full interface name.  Called with one
 argument, interpreted as the interface ifIndex to resolve.
 
   Option     Description                            Default
@@ -1934,9 +2188,9 @@ Returns the full interface name string.
 
   my $name = $cm->interface_getbyname([OPTIONS]);
 
-Get the full interface name or ifIndex number by the Cisco 'shortcut' 
-name.  For example, 'gig0/1' or 's0/1' resolves to 'GigabitEthernet0/1' 
-and 'Serial0/1' respectively.  Called with one argument, interpreted 
+Get the full interface name or ifIndex number by the Cisco 'shortcut'
+name.  For example, 'gig0/1' or 's0/1' resolves to 'GigabitEthernet0/1'
+and 'Serial0/1' respectively.  Called with one argument, interpreted
 as the interface string to resolve.
 
   Option     Description                            Default
@@ -1973,10 +2227,10 @@ counter-type interface metrics):
   OperStatus
   LastChange
 
-B<NOTE:>  Duplex is found in the C<EtherLike-MIB> and thus will not 
+B<NOTE:>  Duplex is found in the C<EtherLike-MIB> and thus will not
 be populated for non-Ethernet interface types.
 
-If successful, returns a pointer to a hash containing interface 
+If successful, returns a pointer to a hash containing interface
 information.
 
   $ifs->{1}->{'Index', 'Description', ...}
@@ -1988,7 +2242,7 @@ information.
 
   my $ips = $cm->interface_ip([1]);
 
-Populate a data structure with the IP information per interface.  
+Populate a data structure with the IP information per interface.
 If successful, returns a pointer to a hash containing interface IP
 information.  For /xx instead of dotted-octet format for mask, use
 the optional boolean argument.
@@ -1999,7 +2253,7 @@ the optional boolean argument.
   ...
   $ips->{n}->[0]->{'IPAddress', 'IPMask'}
 
-First hash value is the interface ifIndex, next array is the list of 
+First hash value is the interface ifIndex, next array is the list of
 current IP information per the interface ifIndex.
 
 =head2 interface_metrics() - return interface metrics
@@ -2008,12 +2262,12 @@ current IP information per the interface ifIndex.
 
 Populate a data structure with interface metrics.
 
-B<NOTE:>  This method only provides the counter values - do B<NOT> 
-confuse this with I<utilization>.  This is the raw number of "metric" 
+B<NOTE:>  This method only provides the counter values - do B<NOT>
+confuse this with I<utilization>.  This is the raw number of "metric"
 types seen since the counter was last reset.
 
-Called with no arguments, populates data structure for all interfaces.  
-Called with one argument, interpreted as the interface(s) to retrieve 
+Called with no arguments, populates data structure for all interfaces.
+Called with one argument, interpreted as the interface(s) to retrieve
 metrics for.
 
   Option     Description                            Default
@@ -2034,8 +2288,8 @@ Interface metrics consist of the following MIB entries:
   Errors       (count of packets in/out)
   Unknowns *   (count of packets in)
 
-B<NOTE:>  Providing an above value for C<-metrics> returns the I<In> 
-and I<Out> counter for the metric; except for I<Unknowns>, which does 
+B<NOTE:>  Providing an above value for C<-metrics> returns the I<In>
+and I<Out> counter for the metric; except for I<Unknowns>, which does
 not have an I<Out> counter.
 
 If successful, returns a pointer to a hash containing interface metrics.
@@ -2059,15 +2313,15 @@ or
 
 Populate a data structure with interface utilizations.
 
-B<NOTE:>  This method processes the counter values described in the 
-C<interface_metrics> method and returns utilizations in packets or 
-octets per second.  This is done by retrieving the metrics, waiting 
-for a 'polling interval' of time, retrieving the metrics again and 
-finally processing the utilizations, populating and returning the 
+B<NOTE:>  This method processes the counter values described in the
+C<interface_metrics> method and returns utilizations in packets or
+octets per second.  This is done by retrieving the metrics, waiting
+for a 'polling interval' of time, retrieving the metrics again and
+finally processing the utilizations, populating and returning the
 data structure.
 
-Called with no arguments, populates data structure for all interfaces.  
-Called with one argument, interpreted as the interface(s) to retrieve 
+Called with no arguments, populates data structure for all interfaces.
+Called with one argument, interpreted as the interface(s) to retrieve
 metrics for.
 
   Option     Description                            Default
@@ -2090,11 +2344,11 @@ Interface utilizations consist of the following MIB entries:
   Errors       (packets/second in/out)
   Unknowns *   (packets/second in)
 
-B<NOTE:>  Providing an above value for C<-metrics> returns the I<In> 
-and I<Out> utilization for the metric; except for I<Unknowns>, which 
+B<NOTE:>  Providing an above value for C<-metrics> returns the I<In>
+and I<Out> utilization for the metric; except for I<Unknowns>, which
 does not have an I<Out> counter.
 
-If successful, returns a pointer to a hash containing interface 
+If successful, returns a pointer to a hash containing interface
 utilizations.
 
   $ifs->{1}->{'InMulticasts', 'OutMulticasts', 'InOctets', ...}
@@ -2104,9 +2358,9 @@ utilizations.
 
 =head3 Notes on Interface Utilization
 
-As previously mentioned, interface utilization is computed by retrieving 
-interface metrics, waiting for a 'polling interval' of time, retrieving 
-interface metrics again and calculating the difference (and other math 
+As previously mentioned, interface utilization is computed by retrieving
+interface metrics, waiting for a 'polling interval' of time, retrieving
+interface metrics again and calculating the difference (and other math
 in the case of octets).  To accomplish this, the following is executed:
 
   User calls 'interface_utilization'
@@ -2118,9 +2372,9 @@ in the case of octets).  To accomplish this, the following is executed:
 
   User program continues
 
-This works well to get the interface utilization over a single polling 
-interval.  However, if the user program were to repeatedly obtain 
-interface utilization statistics (for example, using a while() loop), 
+This works well to get the interface utilization over a single polling
+interval.  However, if the user program were to repeatedly obtain
+interface utilization statistics (for example, using a while() loop),
 this method can be improved.
 
 Consider for example:
@@ -2133,20 +2387,20 @@ Consider for example:
       printf "%i\n", $ifs->{'1'}->{InOctets}
   }
 
-The C<-recursive> option along with an array return value ($ifs, $recur) 
-allows the user to specify 2 return values:  the first is the interface 
-utilization statistics, the second is the interface metrics retrieved 
+The C<-recursive> option along with an array return value ($ifs, $recur)
+allows the user to specify 2 return values:  the first is the interface
+utilization statistics, the second is the interface metrics retrieved
 in the C<interface_utilization> method's second call to the
-C<interface_metrics> method.  Upon first execution, this value is empty 
-and the C<interface_utilization> method calls C<interface_metrics> twice.  
+C<interface_metrics> method.  Upon first execution, this value is empty
+and the C<interface_utilization> method calls C<interface_metrics> twice.
 However, on subsequent calls to the C<interface_utilization> method, it
-skips the first call to the C<interface_metrics> method and just uses 
-the previously obtained metrics found in $recur.  This streamlines the 
-utilization calculations by saving time, bandwidth and processing power 
+skips the first call to the C<interface_metrics> method and just uses
+the previously obtained metrics found in $recur.  This streamlines the
+utilization calculations by saving time, bandwidth and processing power
 on both the device running this script and the device under test.
 
-To illustrate, assume we poll a device at 'T' polling intervals.  We 
-retrieve the metrics (M) at each interval and calculate the utilization 
+To illustrate, assume we poll a device at 'T' polling intervals.  We
+retrieve the metrics (M) at each interval and calculate the utilization
 (U) for each interval.
 
   |---- T ---|---- T ---|---- T ---|
@@ -2170,8 +2424,8 @@ still effective) operation occurs:
 
   my $line = $cm->interface_updown([OPTIONS]);
 
-Admin up or down the interface.  Called with no arguments, admin up 
-all interfaces.  Called with one argument, interpreted as the 
+Admin up or down the interface.  Called with no arguments, admin up
+all interfaces.  Called with one argument, interpreted as the
 interface(s) to admin up.
 
   Option     Description                            Default
@@ -2193,22 +2447,22 @@ range:
 
 Admin down ifIndex 2 3 4 6 9 10 11.
 
-If successful, returns a pointer to an array containing the interfaces 
+If successful, returns a pointer to an array containing the interfaces
 admin up/down.
 
 =head2 Line Options
 
-The following methods are for line management.  Lines on Cisco devices 
+The following methods are for line management.  Lines on Cisco devices
 refer to console, auxillary and terminal lines for user interaction.
-These methods implement the C<OLD-CISCO-TS-MIB> which is not available 
+These methods implement the C<OLD-CISCO-TS-MIB> which is not available
 on some newer forms of IOS.
 
 =head2 line_clear() - clear connection to line
 
   my $line = $cm->line_clear([OPTIONS]);
 
-Clear the line (disconnect interactive session).  Called with no 
-arguments, clear all lines.  Called with one argument, interpreted as 
+Clear the line (disconnect interactive session).  Called with no
+arguments, clear all lines.  Called with one argument, interpreted as
 the lines to clear.
 
   Option     Description                            Default
@@ -2243,8 +2497,8 @@ returns a pointer to a hash containing line information.
 
   my $session = $cm->line_sessions();
 
-Populate a data structure with the session information per line.  If 
-successful, returns a pointer to a hash containing session information.  
+Populate a data structure with the session information per line.  If
+successful, returns a pointer to a hash containing session information.
 
   $sessions->{1}->[0]->{'Session', 'Type', 'Dir' ...}
                   [1]->{'Session', 'Type', 'Dir' ...}
@@ -2252,7 +2506,7 @@ successful, returns a pointer to a hash containing session information.
   ...
   $sessions->{n}->[0]->{'Session', 'Type', 'Dir' ...}
 
-First hash value is the line number, next array is the list of current 
+First hash value is the line number, next array is the list of current
 sessions per the line number.
 
 =head2 line_message() - send message to line
@@ -2260,7 +2514,7 @@ sessions per the line number.
   my $line = $cm->line_message([OPTIONS]);
 
 Send a message to the line.  With no arguments, a "Test Message" is
-sent to all lines.  If 1 argument is provided, interpreted as the 
+sent to all lines.  If 1 argument is provided, interpreted as the
 message to send to all lines.  Valid options are:
 
   Option     Description                            Default
@@ -2268,7 +2522,7 @@ message to send to all lines.  Valid options are:
   -lines     Line or range of lines (, and -)       (all)
   -message   Double-quote delimited string          "Test Message"
 
-If successful, returns a pointer to an array containing the lines 
+If successful, returns a pointer to an array containing the lines
 messaged.
 
 =head2 line_numberof() - return number of lines
@@ -2279,14 +2533,14 @@ If successful, returns the number of lines on the device.
 
 =head2 Memory Info
 
-The following methods are for memory utilization.  These methods 
+The following methods are for memory utilization.  These methods
 implement the C<CISCO-MEMORY-POOL-MIB>.
 
 =head2 memory_info() - return memory utilization info
 
   my $meminfo = $cm->memory_info();
 
-Populate a data structure with memory information.  If successful, 
+Populate a data structure with memory information.  If successful,
 returns a pointer to an array containing memory information.
 
   $meminfo->[0]->{'Name', 'Used', 'Free', ...}
@@ -2296,25 +2550,34 @@ returns a pointer to an array containing memory information.
 
 =head2 Proxy Ping
 
-The following methods are for proxy ping.  These methods implement the 
+The following methods are for proxy ping.  These methods implement the
 C<CISCO-PING-MIB>.
 
 =head2 proxy_ping() - execute proxy ping
 
   my $ping = $cm->proxy_ping([OPTIONS]);
 
-Send proxy ping from the object defined in C<$cm> to the provided 
-destination.  Called with no options, sends the proxy ping to the 
-localhost.  Called with one argument, interpreted as the destination 
+Send proxy ping from the object defined in C<$cm> to the provided
+destination.  Called with no options, sends the proxy ping to the
+localhost.  Called with one argument, interpreted as the destination
 to proxy ping.  Valid options are:
 
   Option     Description                            Default
   ------     -----------                            -------
   -count     Number of pings to send                1
+  -family    Address family IPv4/IPv6               [Inherit from new()]
+               Valid values for IPv4:
+                 4, v4, ip4, ipv4, AF_INET (constant)
+               Valid values for IPv6:
+                 6, v6, ip6, ipv6, AF_INET6 (constant)
   -host      Destination to send proxy ping to      (localhost)
   -size      Size of the ping packets in bytes      64
   -vrf       VRF name to source pings from          [none]
   -wait      Time to wait for replies in seconds    1
+
+A hostname value for B<host> will be resolved to IPv4/v6 based on B<family>.
+B<Family> is inherited from the value set in new() but can be overriden.
+Providing a numeric address will also self-determine the IPv4/v6 address.
 
 Allows the following methods to be called.
 
@@ -2334,7 +2597,7 @@ Return the number of pings received in the current proxy ping execution.
 
   $ping->proxy_ping_minimum();
 
-Return the minimum round trip time in milliseconds of pings sent and 
+Return the minimum round trip time in milliseconds of pings sent and
 received in the current proxy ping execution.
 
 =head3 proxy_ping_average() - return average round trip time
@@ -2348,19 +2611,19 @@ received in the current proxy ping execution.
 
   $ping->proxy_ping_maximum();
 
-Return the maximum round trip time in milliseconds of pings sent and 
+Return the maximum round trip time in milliseconds of pings sent and
 received in the current proxy ping execution.
 
 =head2 System Info
 
-The following methods implement the System MIB defined in C<SNMPv2-MIB> 
+The following methods implement the System MIB defined in C<SNMPv2-MIB>
 and the C<ENTITY-MIB>.
 
 =head2 system_info() - populate system info data structure.
 
   my $sysinfo = $cm->system_info();
 
-Retrieve the system MIB information from the object defined in C<$cm>.  
+Retrieve the system MIB information from the object defined in C<$cm>.
 
 Allows the following methods to be called.
 
@@ -2404,8 +2667,8 @@ Return the system location from the system info data structure.
 
   $sysinfo->system_info_services([1]);
 
-Return a pointer to an array containing the names of the system 
-services from the system info data structure.  For the raw number, 
+Return a pointer to an array containing the names of the system
+services from the system info data structure.  For the raw number,
 use the optional boolean argument.
 
 =head3 system_info_osversion() - return system OS version
@@ -2428,9 +2691,9 @@ returns a pointer to an array containing inventory information.
 
 =head1 SUBROUTINES
 
-Password subroutines are for decrypting and encrypting Cisco type 7 
-passwords.  The algorithm is freely available on the Internet on 
-several sites; thus, I can/will B<NOT> take credit or B<ANY> liability 
+Password subroutines are for decrypting and encrypting Cisco type 7
+passwords.  The algorithm is freely available on the Internet on
+several sites; thus, I can/will B<NOT> take credit or B<ANY> liability
 for its use.
 
 =head2 password_decrypt() - decrypt a Cisco type 7 password
@@ -2444,11 +2707,11 @@ Where C<00071A150754> is the encrypted Cisco password in this example.
   my $passwd = Cisco::Management->password_encrypt('cleartext'[,# | *]);
   print "$_\n" for (@{$passwd});
 
-Where C<cleartext> is the clear text string to encrypt.  The second 
+Where C<cleartext> is the clear text string to encrypt.  The second
 optional argument is a number in the range of 0 - 52 inclusive or
 random text.
 
-Returns a pointer to an array constructed based on the second argument 
+Returns a pointer to an array constructed based on the second argument
 to C<password_encrypt>.
 
   Option  Description            Action
@@ -2457,23 +2720,23 @@ to C<password_encrypt>.
   #       Number 0-52 inclusive  Return password encrypted with # index.
   (other) Random text            Return a random password.
 
-B<NOTE:>  Cisco routers by default only seem to use the first 16 indexes 
-(0 - 15) to encrypt passwords.  You notice this by looking at the first 
-two characters of any type 7 encrypted password in a Cisco router 
-configuration.  However, testing on IOS 12.x and later shows that manually 
-entering a password encrypted with a higher index (generated from this 
-script) to a Cisco configuration will not only be allowed, but will 
-function normally for authentication.  This may be a form of "security 
-through obscurity" given that some older Cisco password decrypters don't 
-use the entire translation index and limit 'valid' passwords to those 
-starting with the fist 16 indexes (0 - 15).  Using passwords with an 
-encryption index of 16 - 52 inclusive I<may> render older Cisco password 
+B<NOTE:>  Cisco routers by default only seem to use the first 16 indexes
+(0 - 15) to encrypt passwords.  You notice this by looking at the first
+two characters of any type 7 encrypted password in a Cisco router
+configuration.  However, testing on IOS 12.x and later shows that manually
+entering a password encrypted with a higher index (generated from this
+script) to a Cisco configuration will not only be allowed, but will
+function normally for authentication.  This may be a form of "security
+through obscurity" given that some older Cisco password decrypters don't
+use the entire translation index and limit 'valid' passwords to those
+starting with the fist 16 indexes (0 - 15).  Using passwords with an
+encryption index of 16 - 52 inclusive I<may> render older Cisco password
 decrypters useless.
 
-Additionally, the Cisco router command prompt seems to be limited to 254 
-characters, making the largest password 250 characters (254 - 4 
+Additionally, the Cisco router command prompt seems to be limited to 254
+characters, making the largest password 250 characters (254 - 4
 characters for the C<pas > (followed by space) command to enter the
-password).  
+password).
 
 =head1 EXPORT
 
@@ -2481,8 +2744,8 @@ None by default.
 
 =head1 EXAMPLES
 
-This distribution comes with several scripts (installed to the default 
-C<bin> install directory) that not only demonstrate example uses but also 
+This distribution comes with several scripts (installed to the default
+C<bin> install directory) that not only demonstrate example uses but also
 provide functional execution.
 
 =head1 LICENSE

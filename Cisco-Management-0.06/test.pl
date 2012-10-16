@@ -3,7 +3,9 @@
 # `make test'. After `make install' it should work as `perl test.pl'
 
 use strict;
+use warnings;
 use Test::Simple tests => 35;
+use ExtUtils::MakeMaker qw(prompt);
 
 my $NUM_TESTS = 35;
 
@@ -25,9 +27,7 @@ print <<STOP;
 
 STOP
 
-print "Router (hostname or IP address)  : ";
-my $router = <STDIN>;
-chomp $router;
+my $router = prompt("Router (hostname or IP address)  : ", '');
 
 if ($router eq '') {
     for (2..$NUM_TESTS) {
@@ -36,9 +36,7 @@ if ($router eq '') {
     exit
 }
 
-print "SNMP read/write Community string : ";
-my $community = <STDIN>;
-chomp $community;
+my $community = prompt("SNMP read/write Community string : ", '');
 
 if ($community eq '') {
     for (2..$NUM_TESTS) {
@@ -110,7 +108,7 @@ my $error;
         ok(0, "Interface (admin up bad range)")
     } else {
         $error = $cm->error;
-        ok($error eq 'Incorrect range format: 100000 to 100002', "Interface (admin up bad range)")
+        ok($error eq "Invalid range format `100000 to 100002'", "Interface (admin up bad range)")
     }
 
 # Interface Info

@@ -46,3 +46,13 @@ Revision history for Perl extension Cisco::Management.
       - Added pass through of options for Net::SNMP.
       - Updated code for config_copy to reuse.
       - User Toby added finish check for CatOS.
+
+IPv4 Only support above
+----      
+IPv4/v6 support below - requires Socket 1.94 minimum for IPv6
+      
+0.06  Tue Oct  8 22:30:00 2012
+      - Timeout on advanced tests with EU::MM prompt().
+      - Enabled IPv6 support if Socket 1.94, else IPv4 only as before.
+      - IPv6 for new() connections and config_copy() and proxy_ping() 
+        destinations.

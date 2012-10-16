@@ -3,7 +3,7 @@
 # `make test'. After `make install' it should work as `perl Cisco-Management.t'
 
 use strict;
-use Test::Simple tests => 10;
+use Test::Simple tests => 9;
 
 use Cisco::Management;
 ok(1, "Loading Module"); # If we made it this far, we're ok.
@@ -19,9 +19,6 @@ my $cm;
     } else {
         ok(0, "Session New")
     }
-
-    # Check
-    ok (($cm->{'_SESSION_'}->{'_hostname'} eq 'localhost') && (!exists($cm->{'hostname'})), "Hostname - assume localhost");
 
     # Close
     $cm->close();
