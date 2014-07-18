@@ -9,6 +9,8 @@ use strict;
 use warnings;
 use Exporter;
 
+our $VERSION = '0.07';
+
 use Sys::Hostname;
 use Socket qw(inet_ntoa AF_INET IPPROTO_TCP);
 use Net::SNMP qw(:asn1 :snmp DEBUG_ALL);
@@ -26,7 +28,6 @@ my $AF_UNSPEC = eval { Socket::AF_UNSPEC() };
 my $AI_NUMERICHOST = eval { Socket::AI_NUMERICHOST() };
 my $NI_NUMERICHOST = eval { Socket::NI_NUMERICHOST() };
 
-our $VERSION      = '0.07';
 our @ISA          = qw(Exporter);
 our @EXPORT       = qw();
 our %EXPORT_TAGS  = (
