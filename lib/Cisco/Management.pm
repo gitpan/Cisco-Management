@@ -1,28 +1,32 @@
 package Cisco::Management;
 
 ########################################################
-#
 # AUTHOR = Michael Vincent
 # www.VinsWorld.com
-#
 ########################################################
 
-require 5.005;
-
 use strict;
+use warnings;
 use Exporter;
 
 use Sys::Hostname;
 use Socket qw(inet_ntoa AF_INET IPPROTO_TCP);
 use Net::SNMP qw(:asn1 :snmp DEBUG_ALL);
-use Net::IPv6Addr;
+# use Net::IPv6Addr;
+my $HAVE_Net_IPv6Addr = 0;
+if ($Socket::VERSION >= 1.94) {
+    eval "use Net::IPv6Addr 0.2";
+    if(!$@) {
+        $HAVE_Net_IPv6Addr = 1
+    }
+}
 
 my $AF_INET6 = eval { Socket::AF_INET6() };
 my $AF_UNSPEC = eval { Socket::AF_UNSPEC() };
 my $AI_NUMERICHOST = eval { Socket::AI_NUMERICHOST() };
 my $NI_NUMERICHOST = eval { Socket::NI_NUMERICHOST() };
 
-our $VERSION      = '0.06';
+our $VERSION      = '0.07';
 our @ISA          = qw(Exporter);
 our @EXPORT       = qw();
 our %EXPORT_TAGS  = (
@@ -595,7 +599,15 @@ sub interface_info {
             }
         }
         # Duplex is different OID
-        $ret{$IFKEYS[9]} = &_snmpgetnext($session, '1.3.6.1.2.1.10.7.2.1.19' . $interface);
+        my $OIDS;
+        ($OIDS, $ret{$IFKEYS[9]}) = &_snmpgetnext($session, '1.3.6.1.2.1.10.7.2.1.19' . $interface);
+        my %duplexIfs;
+        for (0..$#{$OIDS}) {
+            # split the OID at dots
+            my @if = split /\./, $OIDS->[$_];
+            # take the last value, which is the ifIndex equal to value returned
+            $duplexIfs{$if[$#if]} = $ret{$IFKEYS[9]}->[$_]
+        }
 
         my %UpDownStatus = (
             1 => 'UP',
@@ -622,12 +634,13 @@ sub interface_info {
             $IfInfoHash{$IFKEYS[6]} = exists($UpDownStatus{$ret{$IFKEYS[6]}->[$idx]}) ? $UpDownStatus{$ret{$IFKEYS[6]}->[$idx]} : $ret{$IFKEYS[6]}->[$idx];
             $IfInfoHash{$IFKEYS[7]} = exists($UpDownStatus{$ret{$IFKEYS[7]}->[$idx]}) ? $UpDownStatus{$ret{$IFKEYS[7]}->[$idx]} : $ret{$IFKEYS[7]}->[$idx];
             $IfInfoHash{$IFKEYS[8]} = $ret{$IFKEYS[8]}->[$idx];
-            if (defined($ret{$IFKEYS[9]}->[$idx])) {
-                $IfInfoHash{$IFKEYS[9]} = exists($DuplexType{$ret{$IFKEYS[9]}->[$idx]}) ? $DuplexType{$ret{$IFKEYS[9]}->[$idx]} : $ret{$IFKEYS[9]}->[$idx];
+            # if $duplexIfs{ifIndex}, not necessarily the current array index
+            if (exists $duplexIfs{$ret{$IFKEYS[0]}->[$idx]}) {
+                $IfInfoHash{$IFKEYS[9]} = exists($DuplexType{$duplexIfs{$ret{$IFKEYS[0]}->[$idx]}}) ? $DuplexType{$duplexIfs{$ret{$IFKEYS[0]}->[$idx]}} : $duplexIfs{$ret{$IFKEYS[0]}->[$idx]}
             } else {
-                $IfInfoHash{$IFKEYS[9]} = '';
+                $IfInfoHash{$IFKEYS[9]} = ''
             }
-            $IfInfo{$ret{$IFKEYS[0]}->[$idx]} = bless \%IfInfoHash
+            $IfInfo{$ret{$IFKEYS[0]}->[$idx]} = \%IfInfoHash
         }
     }
     return bless \%IfInfo, $class
@@ -863,7 +876,7 @@ sub interface_metrics {
             $IfMetricHash{$IFMETRICKEYS[10]} = $ret{$IFMETRICKEYS[10]}->[$idx];
             $IfMetricHash{$IFMETRICKEYS[11]} = $ret{$IFMETRICKEYS[11]}->[$idx];
             $IfMetricHash{$IFMETRICKEYS[12]} = $ret{$IFMETRICKEYS[12]}->[$idx];
-            $IfMetric{$ret{'Index'}->[$idx]} = bless \%IfMetricHash
+            $IfMetric{$ret{'Index'}->[$idx]} = \%IfMetricHash
         }
     }
     return bless \%IfMetric, $class
@@ -928,7 +941,7 @@ sub interface_utilization {
         $IfUtilHash{$IFMETRICKEYS[10]} = defined($curr->{$ifs}->{$IFMETRICKEYS[10]}) ?  ($curr->{$ifs}->{$IFMETRICKEYS[10]} - $prev->{$ifs}->{$IFMETRICKEYS[10]})     / $params{'polling'} : undef;
         $IfUtilHash{$IFMETRICKEYS[11]} = defined($curr->{$ifs}->{$IFMETRICKEYS[11]}) ?  ($curr->{$ifs}->{$IFMETRICKEYS[11]} - $prev->{$ifs}->{$IFMETRICKEYS[11]})     / $params{'polling'} : undef;
         $IfUtilHash{$IFMETRICKEYS[12]} = defined($curr->{$ifs}->{$IFMETRICKEYS[12]}) ?  ($curr->{$ifs}->{$IFMETRICKEYS[12]} - $prev->{$ifs}->{$IFMETRICKEYS[12]})     / $params{'polling'} : undef;
-        $IfUtil{$ifs} = bless \%IfUtilHash
+        $IfUtil{$ifs} = \%IfUtilHash
     }
     $prev = bless \%IfUtil, $class;
     return wantarray ? ($prev, $curr) : $prev
@@ -1101,7 +1114,7 @@ sub line_info {
         $LineInfoHash{$LINEKEYS[2]}  = $ret{$LINEKEYS[2]}->[$lines];
         $LineInfoHash{$LINEKEYS[1]}  = exists($LineTypes{$ret{$LINEKEYS[1]}->[$lines]}) ? $LineTypes{$ret{$LINEKEYS[1]}->[$lines]} : $ret{$LINEKEYS[1]}->[$lines];
         $LineInfoHash{$LINEKEYS[0]}  = $ret{$LINEKEYS[0]}->[$lines];
-        $LineInfo{$ret{$LINEKEYS[19]}->[$lines]} = bless \%LineInfoHash
+        $LineInfo{$ret{$LINEKEYS[19]}->[$lines]} = \%LineInfoHash
     }
     return bless \%LineInfo, $class
 }
@@ -1354,9 +1367,14 @@ sub proxy_ping {
             $dest .= sprintf("%02x",$_)
         }
     } else {
-        my $addr = Net::IPv6Addr->new($params{'host'});
-        my @dest = $addr->to_array;
-        $dest .= join '', $_ for (@dest);
+        if ($HAVE_Net_IPv6Addr) {
+            my $addr = Net::IPv6Addr->new($params{'host'});
+            my @dest = $addr->to_array;
+            $dest .= join '', $_ for (@dest)
+        } else {
+            $LASTERROR = "Socket > 1.94 and Net::IPv6Addr required";
+            return(undef)
+        }
     }
 
       # ciscoPingEntryStatus (5 = createAndWait, 6 = destroy)
@@ -1686,7 +1704,6 @@ sub error {
 #  0 = DONE
 #  1 = continue
 sub _config_copy {
-
     my ($params, $session, $instance) = @_;
 
     my $response;
@@ -1802,7 +1819,6 @@ sub _config_copy {
 }
 
 sub _get_range {
-
     my ($opt) = @_;
 
     # If argument, it must be a number range in the form:
@@ -1844,7 +1860,6 @@ sub _get_range {
 }
 
 sub _snmpgetnext {
-
     my ($session, $oid) = @_;
 
     my (@oids, @vals);

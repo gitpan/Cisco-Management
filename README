@@ -1,5 +1,5 @@
-Cisco-Management version 0.06
-=============================
+Cisco-Management
+================
 
 INSTALLATION
 
@@ -10,7 +10,16 @@ To install this module type the following:
   make test
   make install
 
-CAVEATS
+IMPORTANT NOTE
+
+Version 0.07 will the last in this line of support.  The next version 
+will be a complete rewrite separating functions into sub classes allowing 
+for quicker and easier development as well as allowing others to 
+contribute to the Cisco::Management package.  For the most part, the 
+initial release will be 99% backward compatible with several warnings 
+for deprecated calls that should be updated to the new API.
+
+IPv6 VERSUS IPv4 ONLY
 
 As of version 0.06, Cisco::Management supports IPv6 on systems with IPv6 
 configured but requires Socket version 1.94 or greater.  This may cause 
@@ -24,9 +33,9 @@ DEPENDENCIES
 This module requires these other modules and libraries:
 
   Socket (requires 1.94 for IPv6)
+    Net::IPv6Addr (required for IPv6 support in ProxyPing)
   Sys::Hostname
   Net::SNMP
-  Net::IPv6Addr
   Test::Simple
 
 COPYRIGHT AND LICENCE
@@ -36,5 +45,3 @@ Copyright (C) 2010 by Michael Vincent (www.VinsWorld.com)
 This library is free software; you can redistribute it and/or modify
 it under the same terms as Perl itself, either Perl version 5.10.1 or,
 at your option, any later version of Perl 5 you may have available.
-
-

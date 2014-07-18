@@ -1,9 +1,11 @@
 #!/usr/bin/perl
 
 use strict;
-use Cisco::Management;
+use warnings;
 use Getopt::Long qw(:config no_ignore_case); #bundling
 use Pod::Usage;
+
+use Cisco::Management;
 
 my $PASSWORD_LINES = "( password 7 )|(-server key 7 )|( key-string 7 )";
 my %opt;

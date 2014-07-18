@@ -1,9 +1,11 @@
 #!/usr/bin/perl
 
 use strict;
-use Cisco::Management;
+use warnings;
 use Getopt::Long qw(:config no_ignore_case); #bundling
 use Pod::Usage;
+
+use Cisco::Management;
 
 my %opt;
 my ($opt_help, $opt_man);

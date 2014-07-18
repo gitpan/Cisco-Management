@@ -16,12 +16,12 @@ ok(1, "Loading Module"); # If we made it this far, we're ok.
 
 print <<STOP;
 
-  Cisco::Management needs a router with SNMP enabled 
-  to perform the full set of tests.  Please provide a 
-  router hostname or IP address and the SNMP read/write 
+  Cisco::Management needs a router with SNMP enabled
+  to perform the full set of tests.  Please provide a
+  router hostname or IP address and the SNMP read/write
   community string at the following prompts to continue.
 
-  To continue without running the tests (if perhaps a 
+  To continue without running the tests (if perhaps a
   router is not available), simply press 'Enter'.
 
 
@@ -63,7 +63,7 @@ my $error;
     }
 
     # Check
-    ok (($cm->{'_SESSION_'}->{'_hostname'} eq $router) 
+    ok (($cm->{'_SESSION_'}->{'_hostname'} eq $router)
     && ($cm->{'hostname'} eq $router)
     && ($cm->{'_SESSION_'}->{'_security'}->{'_community'} eq $community)
     && ($cm->{'community'} eq $community),
@@ -87,7 +87,7 @@ my $error;
     }
 
 # Interface admin up/down
-    if (defined(my $ifs = $cm->interface_updown(100000))) {        
+    if (defined(my $ifs = $cm->interface_updown(100000))) {
         ok(0, "Interface (admin up fake ifIndex)")
     } else {
         $error = $cm->error;
@@ -96,7 +96,7 @@ my $error;
 
     if (defined(my $ifs = $cm->interface_updown(
         interface => '100000-100002',
-        operation => 'down'))) {        
+        operation => 'down'))) {
         ok(0, "Interface (admin down fake range)")
     } else {
         $error = $cm->error;
@@ -104,7 +104,7 @@ my $error;
     }
 
     if (defined(my $ifs = $cm->interface_updown(
-        interface => '100000 to 100002'))) {        
+        interface => '100000 to 100002'))) {
         ok(0, "Interface (admin up bad range)")
     } else {
         $error = $cm->error;
@@ -145,11 +145,11 @@ my $error;
     if (defined($ifs = $cm->interface_metrics(-metrics => ['octets', 'multiCasts']))) {
         $OK = 1;
         for (keys(%{$ifs})) {
-            if (!defined($ifs->{$_}->{InMulticasts}) || 
-                !defined($ifs->{$_}->{OutMulticasts}) || 
-                !defined($ifs->{$_}->{InOctets}) || 
-                !defined($ifs->{$_}->{OutOctets}) || 
-                defined($ifs->{$_}->{InBroadcasts}) || 
+            if (!defined($ifs->{$_}->{InMulticasts}) ||
+                !defined($ifs->{$_}->{OutMulticasts}) ||
+                !defined($ifs->{$_}->{InOctets}) ||
+                !defined($ifs->{$_}->{OutOctets}) ||
+                defined($ifs->{$_}->{InBroadcasts}) ||
                 defined($ifs->{$_}->{OutBroadcasts})) {
                 $OK = 0;
                 last
@@ -165,11 +165,11 @@ my $error;
     if (defined($ifs = $cm->interface_utilization(-polling => 3, -metrics => ['octets', 'BroadCasts']))) {
         $OK = 1;
         for (keys(%{$ifs})) {
-            if (defined($ifs->{$_}->{InMulticasts}) || 
-                defined($ifs->{$_}->{OutMulticasts}) || 
-                !defined($ifs->{$_}->{InOctets}) || 
-                !defined($ifs->{$_}->{OutOctets}) || 
-                !defined($ifs->{$_}->{InBroadcasts}) || 
+            if (defined($ifs->{$_}->{InMulticasts}) ||
+                defined($ifs->{$_}->{OutMulticasts}) ||
+                !defined($ifs->{$_}->{InOctets}) ||
+                !defined($ifs->{$_}->{OutOctets}) ||
+                !defined($ifs->{$_}->{InBroadcasts}) ||
                 !defined($ifs->{$_}->{OutBroadcasts})) {
                 $OK = 0;
                 last
@@ -267,7 +267,7 @@ my $error;
 
     # Provide destination
     if (defined(my $ping = $cm->proxy_ping($router))) {
-        ok(($ping->proxy_ping_sent == 1) && 
+        ok(($ping->proxy_ping_sent == 1) &&
            ($ping->{'_PROXYPING_'}{'_params_'}->{'host'} ne $dest),
         "Proxy Ping (provide destination)")
     } else {
@@ -282,10 +282,10 @@ my $error;
         count => 5,
         wait  => 13,
         vrf   => 'SomeNameVRF'))) {
-        ok(($ping->proxy_ping_sent == 5) && 
-           ($ping->{'_PROXYPING_'}{'_params_'}->{'host'} ne $dest) && 
-           ($ping->{'_PROXYPING_'}{'_params_'}->{'size'} == 255) && 
-           ($ping->{'_PROXYPING_'}{'_params_'}->{'count'} == 5) && 
+        ok(($ping->proxy_ping_sent == 5) &&
+           ($ping->{'_PROXYPING_'}{'_params_'}->{'host'} ne $dest) &&
+           ($ping->{'_PROXYPING_'}{'_params_'}->{'size'} == 255) &&
+           ($ping->{'_PROXYPING_'}{'_params_'}->{'count'} == 5) &&
            ($ping->{'_PROXYPING_'}{'_params_'}->{'wait'} == 13) &&
            ($ping->{'_PROXYPING_'}{'_params_'}->{'vrf'} eq 'SomeNameVRF'),
         "Proxy Ping (provide params)")

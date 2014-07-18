@@ -1,11 +1,13 @@
 #!/usr/bin/perl
 
 use strict;
+use warnings;
+use Getopt::Long qw(:config no_ignore_case); #bundling
+use Pod::Usage;
+
 use IO::Socket;
 use Sys::Hostname;
 use Cisco::Management;
-use Getopt::Long qw(:config no_ignore_case); #bundling
-use Pod::Usage;
 
 my %opt;
 my ($opt_help, $opt_man);
