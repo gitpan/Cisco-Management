@@ -1,11 +1,15 @@
 Revision history for Perl extension Cisco::Management.
 
-Version 0.07 will the last in this line of support.  The next version
+Version 0.08 will the last in this line of support.  The next version
 will be a complete rewrite separating functions into sub classes allowing
 for quicker and easier development as well as allowing others to
 contribute to the Cisco::Management package.  For the most part, the
 initial release will be 99% backward compatible with several warnings
 for deprecated calls that should be updated to the new API.
+
+0.08  Sun Jul 27 00:30:00 2014
+      - Fix erroneous test fail for t/00-...
+      - Warning for last support in Pod.
 
 0.07  Fri Jul 18 00:30:00 2014
       - Bug fix in interface_info() erroneously attributing duplex to

@@ -9,7 +9,7 @@ use strict;
 use warnings;
 use Exporter;
 
-our $VERSION = '0.07';
+our $VERSION = '0.08';
 
 use Sys::Hostname;
 use Socket qw(inet_ntoa AF_INET IPPROTO_TCP);
@@ -2039,6 +2039,13 @@ for Cisco devices - mostly via SNMP.  B<Cisco::Management> uses the
 B<Net::SNMP> module to do the SNMP calls.
 
 =head1 CAVEATS
+
+Version 0.08 will the last in this line of support.  The next version
+will be a complete rewrite separating functions into sub classes allowing
+for quicker and easier development as well as allowing others to
+contribute to the Cisco::Management package.  For the most part, the
+initial release will be 99% backward compatible with several warnings
+for deprecated calls that should be updated to the new API.
 
 As of version 0.06, B<Cisco::Management> supports IPv6 on systems with IPv6
 configured but requires B<Socket> version 1.94 or greater.  This may cause

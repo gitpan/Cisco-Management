@@ -23,4 +23,4 @@ requires:
   Socket: 0
   Sys::Hostname: 0
   Test::Simple: 0
-version: 0.07
+version: 0.08

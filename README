@@ -12,7 +12,7 @@ To install this module type the following:
 
 IMPORTANT NOTE
 
-Version 0.07 will the last in this line of support.  The next version 
+Version 0.08 will the last in this line of support.  The next version 
 will be a complete rewrite separating functions into sub classes allowing 
 for quicker and easier development as well as allowing others to 
 contribute to the Cisco::Management package.  For the most part, the 
